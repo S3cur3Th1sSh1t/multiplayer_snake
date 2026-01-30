@@ -14,12 +14,16 @@ A multiplayer Snake game for Linux/Windows supporting up to 10 players over the 
 - **Weapon System**:
   - **Bomb (W)**: Collect bombs and shoot at other snakes (destroys 4 segments!)
   - **Ghost (G)**: Become invisible for 5 seconds - other players can't see you!
+- **Shrinking Walls**: Battle royale mode activates when 3 or fewer players remain
+  - Walls shrink every 15 seconds (3 players) or 10 seconds (2 players)
+  - Bombs can destroy wall segments to create escape routes
+- **Dead Snake Obstacles**: Eliminated players remain as solid obstacles on the field
+- **Epic Winner Display**: FAT gold text, rankings, and medals (🥇🥈🥉) for top 3 players
 - **Speed Modes**: Normal, Fast, Ultra
 - **Wall Options**: Play with or without walls (wrap-around possible)
 - **GUI Mode**: Graphical interface with Pygame (optional)
 - **Terminal Mode**: Play directly in the Linux/Windows terminal (curses)
 - **Explosion Animations**: Visual effects for bomb hits
-- **Collision Detection**: Dead snakes remain as obstacles on the playing field
 - **Security Features**: Password authentication, rate limiting, connection limits
 
 ## Installation
@@ -110,9 +114,8 @@ python snake_game.py --windowed --connect 192.168.1.100:5555 --gui
 
 | Key | Action |
 |-----|--------|
-| P | Pause game |
-| R | Restart (single player only) |
-| + / - | Adjust game speed |
+| S | Start game (when in lobby) |
+| R | Restart game (after game over) |
 | Q / ESC | Quit game |
 
 ## Command-Line Options
@@ -171,6 +174,26 @@ python snake_game.py --windowed --connect 192.168.1.100:5555 --gui
 - **Explosion animation** on hit (especially nice in GUI mode)
 - One weapon per player at a time
 
+## Endgame Features
+
+### Shrinking Walls (Battle Royale)
+When 3 or fewer players remain alive, the walls automatically activate and begin shrinking:
+- **3 players alive**: Walls shrink every 15 seconds
+- **2 players alive**: Walls shrink every 10 seconds
+- **Strategic bombing**: Use bombs to destroy wall segments and create escape routes
+- **Minimum arena**: Walls stop shrinking at 10x10 to prevent complete collapse
+- Forces final confrontation and prevents indefinite stalemates
+
+### Winner Celebration
+When the game ends, an epic winner screen displays:
+- **FAT gold text** announcing the winner (impossible to miss!)
+- **Rankings**: Top 3 players with Olympic-style medals
+  - 🥇 **1st Place** - Gold medal and largest text
+  - 🥈 **2nd Place** - Silver medal and medium text
+  - 🥉 **3rd Place** - Bronze medal and smaller text
+- **Scores**: Points shown for each ranked player
+- **Restart**: Press 'R' to play again with same players
+
 ## GUI Mode
 
 The GUI mode offers:
@@ -195,9 +218,10 @@ Your snake dies when:
 - Touching a wall (only if walls are enabled!)
 - Touching itself
 - Touching another snake (alive or dead)
+- Touching shrinking walls (during endgame battle royale)
 - Being reduced to less than 2 segments by a bomb
 
-Dead snakes remain as obstacles on the playing field!
+**Dead snakes remain as solid obstacles** - eliminated players continue to affect the game by creating maze-like obstacles on the playing field!
 
 **Without walls (`--no-walls`)**: Snakes appear on the other side of the screen.
 
@@ -209,11 +233,14 @@ Dead snakes remain as obstacles on the playing field!
 
 ## Gameplay Flow
 
-1. **Start server**: One player starts the server with `server IP PORT`
-2. **Players connect**: Other players connect with `connect IP:PORT`
-3. **Wait for start**: All players see the connected snakes
+1. **Start server**: One player starts the server with `--server --ip IP --port PORT`
+2. **Players connect**: Other players connect with `--connect IP:PORT`
+3. **Wait for start**: All players see the connected snakes in the lobby
 4. **Start game**: Any player can press `S` to start the game
-5. **Play**: All players control their snakes simultaneously
+5. **Early game**: All players control their snakes simultaneously
+6. **Endgame**: When 3 or fewer players remain, shrinking walls activate
+7. **Victory**: Winner announced with rankings and medals for top 3 players
+8. **Restart**: Press `R` to play again with same players
 
 ## Technical Details
 

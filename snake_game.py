@@ -230,6 +230,11 @@ class GameData:
     winner: str = ""
     countdown: int = 0  # Countdown value (5, 4, 3, 2, 1, 0)
     countdown_start: float = 0  # Timestamp when countdown started
+    shrinking_walls_active: bool = False  # Shrinking walls mode activated
+    shrinking_wall_bounds: Dict = field(default_factory=lambda: {'top': 0, 'bottom': 0, 'left': 0, 'right': 0})  # Current wall boundaries
+    last_wall_shrink: float = 0  # Timestamp of last wall shrink
+    destroyed_wall_segments: List[List[int]] = field(default_factory=list)  # Wall segments destroyed by bombs
+    player_rankings: List[Dict] = field(default_factory=list)  # Rankings: [{'player_id': id, 'player_name': name, 'rank': 1, 'score': 100}]
 
 
 def ensure_game_dir():
@@ -684,7 +689,10 @@ class SnakeGameLogic:
         
         # Check collisions
         self._check_collisions(game)
-        
+
+        # Update rankings after collisions
+        self._update_rankings(game)
+
         # Spawn weapons (alternating between bomb and ghost)
         if current_time >= game.next_weapon_spawn:
             if random.random() < 0.5:
@@ -692,9 +700,32 @@ class SnakeGameLogic:
             else:
                 self._spawn_ghost(game)
             game.next_weapon_spawn = current_time + random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX)
-        
+
         # Check winner
         alive_count = sum(1 for s in game.snakes.values() if s['alive'])
+
+        # Activate shrinking walls when 3 or fewer players remain
+        if alive_count <= 3 and alive_count > 0 and not game.shrinking_walls_active:
+            game.shrinking_walls_active = True
+            game.walls_enabled = True  # Force walls on
+            game.shrinking_wall_bounds = {
+                'top': 0,
+                'bottom': game.height - 1,
+                'left': 0,
+                'right': game.width - 1
+            }
+            game.last_wall_shrink = current_time
+            print(f"Shrinking walls mode activated! {alive_count} players remaining.")
+
+        # Update shrinking walls
+        if game.shrinking_walls_active and alive_count > 0:
+            # Determine shrink interval based on player count
+            shrink_interval = 15.0 if alive_count == 3 else 10.0
+
+            if current_time - game.last_wall_shrink >= shrink_interval:
+                self._shrink_walls(game)
+                game.last_wall_shrink = current_time
+
         if alive_count <= 1 and len(game.snakes) > 1:
             game.state = GameState.FINISHED.value
             for pid, s in game.snakes.items():
@@ -828,17 +859,41 @@ class SnakeGameLogic:
                     bomb['x'] += 1
                 
                 bomb['remaining_range'] -= 1
-                
+
                 # Check wall collision (only if walls enabled)
                 if game.walls_enabled:
-                    if (bomb['x'] <= 0 or bomb['x'] >= game.width - 1 or
-                        bomb['y'] <= 0 or bomb['y'] >= game.height - 1):
-                        # Bomb hits wall - create explosion
-                        self._create_explosion(game, bomb['x'], bomb['y'])
-                        bomb_exploded = True
-                        if i not in bombs_to_remove:
-                            bombs_to_remove.append(i)
-                        break
+                    wall_hit = False
+
+                    if game.shrinking_walls_active:
+                        # Check shrinking wall collision
+                        bounds = game.shrinking_wall_bounds
+                        if bomb['y'] == bounds['top'] or bomb['y'] == bounds['bottom']:
+                            if bounds['left'] <= bomb['x'] <= bounds['right']:
+                                if [bomb['x'], bomb['y']] not in game.destroyed_wall_segments:
+                                    wall_hit = True
+                        elif bomb['x'] == bounds['left'] or bomb['x'] == bounds['right']:
+                            if bounds['top'] <= bomb['y'] <= bounds['bottom']:
+                                if [bomb['x'], bomb['y']] not in game.destroyed_wall_segments:
+                                    wall_hit = True
+
+                        if wall_hit:
+                            # Destroy wall segment
+                            game.destroyed_wall_segments.append([bomb['x'], bomb['y']])
+                            self._create_explosion(game, bomb['x'], bomb['y'])
+                            bomb_exploded = True
+                            if i not in bombs_to_remove:
+                                bombs_to_remove.append(i)
+                            break
+                    else:
+                        # Normal wall collision at map edges
+                        if (bomb['x'] <= 0 or bomb['x'] >= game.width - 1 or
+                            bomb['y'] <= 0 or bomb['y'] >= game.height - 1):
+                            # Bomb hits wall - create explosion
+                            self._create_explosion(game, bomb['x'], bomb['y'])
+                            bomb_exploded = True
+                            if i not in bombs_to_remove:
+                                bombs_to_remove.append(i)
+                            break
                 else:
                     # Wrap around
                     if bomb['x'] <= 0:
@@ -917,45 +972,103 @@ class SnakeGameLogic:
         for player_id, snake in game.snakes.items():
             if not snake['alive']:
                 continue
-            
+
             head_x, head_y = snake['body'][0][0], snake['body'][0][1]
-            
-            # Wall collision (only if walls enabled)
+
+            # Wall collision (check normal walls or shrinking walls)
             if game.walls_enabled:
-                if (head_x <= 0 or head_x >= game.width - 1 or
-                    head_y <= 0 or head_y >= game.height - 1):
-                    snake['alive'] = False
-                    continue
-            
+                if game.shrinking_walls_active:
+                    # Check shrinking wall boundaries (exclude destroyed segments)
+                    bounds = game.shrinking_wall_bounds
+                    wall_hit = False
+
+                    # Check if on wall boundary
+                    if head_y == bounds['top'] or head_y == bounds['bottom']:
+                        if bounds['left'] <= head_x <= bounds['right']:
+                            # Check if this wall segment was destroyed
+                            if [head_x, head_y] not in game.destroyed_wall_segments:
+                                wall_hit = True
+                    elif head_x == bounds['left'] or head_x == bounds['right']:
+                        if bounds['top'] <= head_y <= bounds['bottom']:
+                            # Check if this wall segment was destroyed
+                            if [head_x, head_y] not in game.destroyed_wall_segments:
+                                wall_hit = True
+
+                    if wall_hit:
+                        snake['alive'] = False
+                        continue
+                else:
+                    # Normal wall collision at map edges
+                    if (head_x <= 0 or head_x >= game.width - 1 or
+                        head_y <= 0 or head_y >= game.height - 1):
+                        snake['alive'] = False
+                        continue
+
             # Self collision
             for segment in snake['body'][1:]:
                 if head_x == segment[0] and head_y == segment[1]:
                     snake['alive'] = False
                     break
-            
+
             if not snake['alive']:
                 continue
-            
-            # Other snake collision (skip dead snakes and invisible snakes)
+
+            # Other snake collision (dead snakes are now obstacles, skip only invisible snakes)
             for other_id, other_snake in game.snakes.items():
                 if other_id == player_id:
                     continue
-                
-                # Don't collide with dead snakes
-                if not other_snake['alive']:
-                    continue
-                
+
                 # Don't collide with invisible snakes (ghost mode)
                 if other_snake.get('is_invisible', False):
                     continue
-                
+
+                # Collide with ALL other snakes (alive or dead)
                 for segment in other_snake['body']:
                     if head_x == segment[0] and head_y == segment[1]:
                         snake['alive'] = False
                         break
-                
+
                 if not snake['alive']:
                     break
+
+    def _update_rankings(self, game: GameData):
+        """Update rankings after collisions - add newly dead players"""
+        alive_count = sum(1 for s in game.snakes.values() if s['alive'])
+
+        # Add newly dead players to rankings (in reverse order of death)
+        for player_id, snake in game.snakes.items():
+            if not snake['alive']:
+                # Check if already in rankings
+                if player_id not in [r['player_id'] for r in game.player_rankings]:
+                    # Calculate rank based on number of players still alive
+                    # If 3 alive and you die, you're 4th place
+                    rank = alive_count + len(game.player_rankings) + 1
+                    game.player_rankings.append({
+                        'player_id': player_id,
+                        'player_name': snake['player_name'],
+                        'rank': rank,
+                        'score': snake['score']
+                    })
+
+    def _shrink_walls(self, game: GameData):
+        """Shrink the walls inward by one unit on all sides"""
+        bounds = game.shrinking_wall_bounds
+
+        # Move walls inward
+        bounds['top'] += 1
+        bounds['bottom'] -= 1
+        bounds['left'] += 1
+        bounds['right'] -= 1
+
+        # Ensure walls don't collapse completely (minimum 10x10 space)
+        if bounds['right'] - bounds['left'] < 10:
+            bounds['left'] = max(0, (game.width - 10) // 2)
+            bounds['right'] = min(game.width - 1, bounds['left'] + 10)
+        if bounds['bottom'] - bounds['top'] < 10:
+            bounds['top'] = max(0, (game.height - 10) // 2)
+            bounds['bottom'] = min(game.height - 1, bounds['top'] + 10)
+
+        print(f"Walls shrunk! New bounds: top={bounds['top']}, bottom={bounds['bottom']}, left={bounds['left']}, right={bounds['right']}")
 
 
 # =============================================================================
@@ -1448,32 +1561,44 @@ class GameServer:
     def _restart_game(self):
         """Restart the game with all connected players"""
         print("Restarting game...")
-        
+
         # Save connected player info
         player_info = {}
         for player_id, client in self.clients.items():
             if client.get('joined'):
                 player_info[player_id] = client.get('name', 'Player')
-        
-        # Reset game state
-        self.game = GameData()
-        self.game.mode = self.mode
-        self.game.no_walls = self.no_walls
-        self.game.state = GameState.WAITING.value
-        
+
+        # Save game settings
+        old_mode = self.game.mode
+        old_speed = self.game.speed
+        old_walls = self.game.walls_enabled
+        old_width = self.game.width
+        old_height = self.game.height
+
+        # Reset game state with proper initialization
+        self.game = GameData(
+            mode=old_mode,
+            speed=old_speed,
+            walls_enabled=old_walls,
+            width=old_width,
+            height=old_height,
+            state=GameState.WAITING.value,
+            next_weapon_spawn=time.time() + random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX)
+        )
+
         # Re-add all connected players
         for player_id, name in player_info.items():
             self.logic._add_player_to_game(self.game, player_id, name)
             print(f"Player '{name}' re-added to game")
-        
+
         # Clear pending inputs
         with self.inputs_lock:
             self.pending_inputs.clear()
-        
+
         # Start countdown if players are present
         if len(self.game.snakes) > 0:
             self._start_countdown()
-        
+
         print(f"Game restarted with {len(player_info)} players")
     
     def _update_countdown(self):
@@ -1545,7 +1670,10 @@ class GameServer:
         
         # Check collisions
         self.logic._check_collisions(self.game)
-        
+
+        # Update rankings after collisions
+        self.logic._update_rankings(self.game)
+
         # Spawn weapons
         if current_time >= self.game.next_weapon_spawn:
             if random.random() < 0.5:
@@ -1553,15 +1681,59 @@ class GameServer:
             else:
                 self.logic._spawn_ghost(self.game)
             self.game.next_weapon_spawn = current_time + random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX)
-        
+
         # Check winner
         alive_count = sum(1 for s in self.game.snakes.values() if s['alive'])
+
+        # Activate shrinking walls when 3 or fewer players remain
+        if alive_count <= 3 and alive_count > 0 and not self.game.shrinking_walls_active:
+            self.game.shrinking_walls_active = True
+            self.game.walls_enabled = True  # Force walls on
+            self.game.shrinking_wall_bounds = {
+                'top': 0,
+                'bottom': self.game.height - 1,
+                'left': 0,
+                'right': self.game.width - 1
+            }
+            self.game.last_wall_shrink = current_time
+            print(f"Shrinking walls mode activated! {alive_count} players remaining.")
+
+        # Update shrinking walls
+        if self.game.shrinking_walls_active and alive_count > 0:
+            # Determine shrink interval based on player count
+            shrink_interval = 15.0 if alive_count == 3 else 10.0
+
+            if current_time - self.game.last_wall_shrink >= shrink_interval:
+                self.logic._shrink_walls(self.game)
+                self.game.last_wall_shrink = current_time
         if alive_count <= 1 and len(self.game.snakes) > 1:
             self.game.state = GameState.FINISHED.value
+
+            # Build rankings - winner gets rank 1
             for pid, s in self.game.snakes.items():
                 if s['alive']:
                     self.game.winner = s['player_name']
+                    # Add winner to rankings
+                    self.game.player_rankings.insert(0, {
+                        'player_id': pid,
+                        'player_name': s['player_name'],
+                        'rank': 1,
+                        'score': s['score']
+                    })
                     print(f"Game over! Winner: {self.game.winner}")
+                elif pid not in [r['player_id'] for r in self.game.player_rankings]:
+                    # Add last dead player if not already in rankings
+                    rank = len(self.game.player_rankings) + 1
+                    self.game.player_rankings.append({
+                        'player_id': pid,
+                        'player_name': s['player_name'],
+                        'rank': rank,
+                        'score': s['score']
+                    })
+
+            # Update ranks for all players (1st, 2nd, 3rd, etc.)
+            for i, ranking in enumerate(self.game.player_rankings):
+                ranking['rank'] = i + 1
         
         self.game.tick += 1
     
@@ -1925,15 +2097,45 @@ class NetworkTerminalClient:
         
         # Draw border (only if walls enabled)
         if game.walls_enabled:
-            for x in range(min(game.width + 1, self.width - 1)):
-                new_buffer[(x, 0)] = (WALL_SYMBOL, curses.color_pair(14))
-                if game.height < self.height:
-                    new_buffer[(x, game.height)] = (WALL_SYMBOL, curses.color_pair(14))
-            
-            for y in range(min(game.height + 1, self.height - 1)):
-                new_buffer[(0, y)] = (WALL_SYMBOL, curses.color_pair(14))
-                if game.width < self.width:
-                    new_buffer[(game.width, y)] = (WALL_SYMBOL, curses.color_pair(14))
+            if game.shrinking_walls_active:
+                # Draw shrinking walls at current boundaries
+                bounds = game.shrinking_wall_bounds
+                destroyed = game.destroyed_wall_segments
+
+                # Top wall
+                for x in range(bounds['left'], bounds['right'] + 1):
+                    if [x, bounds['top']] not in destroyed:
+                        if 0 <= x < self.width - 1 and 0 <= bounds['top'] < self.height - 1:
+                            new_buffer[(x, bounds['top'])] = (WALL_SYMBOL, curses.color_pair(14))
+
+                # Bottom wall
+                for x in range(bounds['left'], bounds['right'] + 1):
+                    if [x, bounds['bottom']] not in destroyed:
+                        if 0 <= x < self.width - 1 and 0 <= bounds['bottom'] < self.height - 1:
+                            new_buffer[(x, bounds['bottom'])] = (WALL_SYMBOL, curses.color_pair(14))
+
+                # Left wall
+                for y in range(bounds['top'], bounds['bottom'] + 1):
+                    if [bounds['left'], y] not in destroyed:
+                        if 0 <= bounds['left'] < self.width - 1 and 0 <= y < self.height - 1:
+                            new_buffer[(bounds['left'], y)] = (WALL_SYMBOL, curses.color_pair(14))
+
+                # Right wall
+                for y in range(bounds['top'], bounds['bottom'] + 1):
+                    if [bounds['right'], y] not in destroyed:
+                        if 0 <= bounds['right'] < self.width - 1 and 0 <= y < self.height - 1:
+                            new_buffer[(bounds['right'], y)] = (WALL_SYMBOL, curses.color_pair(14))
+            else:
+                # Normal walls at map edges
+                for x in range(min(game.width + 1, self.width - 1)):
+                    new_buffer[(x, 0)] = (WALL_SYMBOL, curses.color_pair(14))
+                    if game.height < self.height:
+                        new_buffer[(x, game.height)] = (WALL_SYMBOL, curses.color_pair(14))
+
+                for y in range(min(game.height + 1, self.height - 1)):
+                    new_buffer[(0, y)] = (WALL_SYMBOL, curses.color_pair(14))
+                    if game.width < self.width:
+                        new_buffer[(game.width, y)] = (WALL_SYMBOL, curses.color_pair(14))
         
         # Draw explosions
         for exp in game.explosions:
@@ -2063,8 +2265,18 @@ class NetworkTerminalClient:
                 score = my_snake.get('score', 0)
                 status = f" Score: {score} | {alive_status}{weapon_status} | Speed: {game.speed.upper()}"
             else:
-                status = f" GAME OVER! Winner: {game.winner} | Press 'R' to RESTART or 'Q' to quit"
-            
+                # FINISHED state - Show winner and rankings
+                status = f" *** {game.winner} WINS! ***"
+                # Show rankings if available
+                if game.player_rankings:
+                    medals = {1: "1st", 2: "2nd", 3: "3rd"}
+                    rankings_str = " | Rankings: "
+                    for r in game.player_rankings[:3]:
+                        rank_label = medals.get(r['rank'], f"{r['rank']}th")
+                        rankings_str += f"{rank_label}:{r['player_name']}({r['score']}) "
+                    status += rankings_str[:self.width//2]
+                status += " | Press R:restart Q:quit"
+
             try:
                 self.stdscr.addstr(status_y, 0, status[:self.width-1])
             except:
@@ -2200,15 +2412,45 @@ class TerminalGame:
         
         # Draw border (only if walls enabled)
         if game.walls_enabled:
-            for x in range(min(game.width + 1, self.width - 1)):
-                new_buffer[(x, 0)] = (WALL_SYMBOL, curses.color_pair(14))
-                if game.height < self.height:
-                    new_buffer[(x, game.height)] = (WALL_SYMBOL, curses.color_pair(14))
-            
-            for y in range(min(game.height + 1, self.height - 1)):
-                new_buffer[(0, y)] = (WALL_SYMBOL, curses.color_pair(14))
-                if game.width < self.width:
-                    new_buffer[(game.width, y)] = (WALL_SYMBOL, curses.color_pair(14))
+            if game.shrinking_walls_active:
+                # Draw shrinking walls at current boundaries
+                bounds = game.shrinking_wall_bounds
+                destroyed = game.destroyed_wall_segments
+
+                # Top wall
+                for x in range(bounds['left'], bounds['right'] + 1):
+                    if [x, bounds['top']] not in destroyed:
+                        if 0 <= x < self.width - 1 and 0 <= bounds['top'] < self.height - 1:
+                            new_buffer[(x, bounds['top'])] = (WALL_SYMBOL, curses.color_pair(14))
+
+                # Bottom wall
+                for x in range(bounds['left'], bounds['right'] + 1):
+                    if [x, bounds['bottom']] not in destroyed:
+                        if 0 <= x < self.width - 1 and 0 <= bounds['bottom'] < self.height - 1:
+                            new_buffer[(x, bounds['bottom'])] = (WALL_SYMBOL, curses.color_pair(14))
+
+                # Left wall
+                for y in range(bounds['top'], bounds['bottom'] + 1):
+                    if [bounds['left'], y] not in destroyed:
+                        if 0 <= bounds['left'] < self.width - 1 and 0 <= y < self.height - 1:
+                            new_buffer[(bounds['left'], y)] = (WALL_SYMBOL, curses.color_pair(14))
+
+                # Right wall
+                for y in range(bounds['top'], bounds['bottom'] + 1):
+                    if [bounds['right'], y] not in destroyed:
+                        if 0 <= bounds['right'] < self.width - 1 and 0 <= y < self.height - 1:
+                            new_buffer[(bounds['right'], y)] = (WALL_SYMBOL, curses.color_pair(14))
+            else:
+                # Normal walls at map edges
+                for x in range(min(game.width + 1, self.width - 1)):
+                    new_buffer[(x, 0)] = (WALL_SYMBOL, curses.color_pair(14))
+                    if game.height < self.height:
+                        new_buffer[(x, game.height)] = (WALL_SYMBOL, curses.color_pair(14))
+
+                for y in range(min(game.height + 1, self.height - 1)):
+                    new_buffer[(0, y)] = (WALL_SYMBOL, curses.color_pair(14))
+                    if game.width < self.width:
+                        new_buffer[(game.width, y)] = (WALL_SYMBOL, curses.color_pair(14))
         
         # Draw explosions
         for exp in game.explosions:
@@ -2318,13 +2560,23 @@ class TerminalGame:
                 score = my_snake.get('score', 0)
                 status = f" Score: {score} | {alive_status}{weapon_status} | Speed: {game.speed.upper()}"
             else:
-                status = f" GAME OVER! Winner: {game.winner} | Press 'Q' to quit"
-            
+                # FINISHED state - Show winner and rankings
+                status = f" *** {game.winner} WINS! ***"
+                # Show rankings if available
+                if game.player_rankings:
+                    medals = {1: "1st", 2: "2nd", 3: "3rd"}
+                    rankings_str = " | Rankings: "
+                    for r in game.player_rankings[:3]:
+                        rank_label = medals.get(r['rank'], f"{r['rank']}th")
+                        rankings_str += f"{rank_label}:{r['player_name']}({r['score']}) "
+                    status += rankings_str[:self.width//2]
+                status += " | Press Q:quit"
+
             try:
                 self.stdscr.addstr(status_y, 0, status[:self.width-1])
             except:
                 pass
-        
+
         if status_y + 1 < self.height:
             players_str = " Players: "
             for pid, snake in game.snakes.items():
@@ -2630,12 +2882,38 @@ class GUIGame:
         
         # Draw walls if enabled
         if game.walls_enabled:
-            for x in range(game.width + 1):
-                self.screen.blit(self.wall_sprite, (x * cs, 0))
-                self.screen.blit(self.wall_sprite, (x * cs, game.height * cs))
-            for y in range(game.height + 1):
-                self.screen.blit(self.wall_sprite, (0, y * cs))
-                self.screen.blit(self.wall_sprite, (game.width * cs, y * cs))
+            if game.shrinking_walls_active:
+                # Draw shrinking walls at current boundaries
+                bounds = game.shrinking_wall_bounds
+                destroyed = game.destroyed_wall_segments
+
+                # Top wall
+                for x in range(bounds['left'], bounds['right'] + 1):
+                    if [x, bounds['top']] not in destroyed:
+                        self.screen.blit(self.wall_sprite, (x * cs, bounds['top'] * cs))
+
+                # Bottom wall
+                for x in range(bounds['left'], bounds['right'] + 1):
+                    if [x, bounds['bottom']] not in destroyed:
+                        self.screen.blit(self.wall_sprite, (x * cs, bounds['bottom'] * cs))
+
+                # Left wall
+                for y in range(bounds['top'], bounds['bottom'] + 1):
+                    if [bounds['left'], y] not in destroyed:
+                        self.screen.blit(self.wall_sprite, (bounds['left'] * cs, y * cs))
+
+                # Right wall
+                for y in range(bounds['top'], bounds['bottom'] + 1):
+                    if [bounds['right'], y] not in destroyed:
+                        self.screen.blit(self.wall_sprite, (bounds['right'] * cs, y * cs))
+            else:
+                # Normal walls at map edges
+                for x in range(game.width + 1):
+                    self.screen.blit(self.wall_sprite, (x * cs, 0))
+                    self.screen.blit(self.wall_sprite, (x * cs, game.height * cs))
+                for y in range(game.height + 1):
+                    self.screen.blit(self.wall_sprite, (0, y * cs))
+                    self.screen.blit(self.wall_sprite, (game.width * cs, y * cs))
         
         # Draw foods
         for food in game.foods:
@@ -2748,10 +3026,50 @@ class GUIGame:
             text_surf = self.font.render(text, True, (255, 255, 255))
             self.screen.blit(text_surf, (10, status_y))
         else:
-            text = f"GAME OVER! Winner: {game.winner} | Press 'Q' to quit"
-            text_surf = self.font.render(text, True, (255, 255, 0))
+            # FINISHED state - Show FAT winner text and rankings
+            # Winner announcement with LARGE text
+            winner_font = pygame.font.Font(None, 120)
+            winner_text = f"{game.winner} WINS!"
+            winner_surf = winner_font.render(winner_text, True, (255, 215, 0))  # Gold color
+            winner_rect = winner_surf.get_rect(center=(self.screen_width // 2, 100))
+
+            # Add shadow for better visibility
+            shadow_surf = winner_font.render(winner_text, True, (0, 0, 0))
+            shadow_rect = shadow_surf.get_rect(center=(self.screen_width // 2 + 3, 103))
+            self.screen.blit(shadow_surf, shadow_rect)
+            self.screen.blit(winner_surf, winner_rect)
+
+            # Display rankings
+            rankings_font = pygame.font.Font(None, 48)
+            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+            y_offset = 200
+            for ranking in game.player_rankings[:3]:  # Show top 3
+                rank = ranking['rank']
+                name = ranking['player_name']
+                score = ranking['score']
+
+                # Get medal or rank number
+                medal = medals.get(rank, f"{rank}.")
+                rank_text = f"{medal} {name} - {score} points"
+
+                # Different font sizes for different ranks
+                if rank == 1:
+                    text_surf = rankings_font.render(rank_text, True, (255, 215, 0))  # Gold
+                elif rank == 2:
+                    text_surf = pygame.font.Font(None, 42).render(rank_text, True, (192, 192, 192))  # Silver
+                elif rank == 3:
+                    text_surf = pygame.font.Font(None, 38).render(rank_text, True, (205, 127, 50))  # Bronze
+
+                text_rect = text_surf.get_rect(center=(self.screen_width // 2, y_offset))
+                self.screen.blit(text_surf, text_rect)
+                y_offset += 60
+
+            # Instructions at bottom
+            text = "Press 'Q' to quit"
+            text_surf = self.font.render(text, True, (200, 200, 200))
             self.screen.blit(text_surf, (10, status_y))
-        
+
         # Player list
         player_x = 10
         for pid, snake in game.snakes.items():
@@ -2898,7 +3216,10 @@ class GUIGame:
                     
                     # Check collisions
                     self.logic._check_collisions(game)
-                    
+
+                    # Update rankings after collisions
+                    self.logic._update_rankings(game)
+
                     # Spawn weapons (alternating between bomb and ghost)
                     if current_time >= game.next_weapon_spawn:
                         if random.random() < 0.5:
@@ -2906,9 +3227,31 @@ class GUIGame:
                         else:
                             self.logic._spawn_ghost(game)
                         game.next_weapon_spawn = current_time + random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX)
-                    
+
                     # Check winner
                     alive_count = sum(1 for s in game.snakes.values() if s['alive'])
+
+                    # Activate shrinking walls when 3 or fewer players remain
+                    if alive_count <= 3 and alive_count > 0 and not game.shrinking_walls_active:
+                        game.shrinking_walls_active = True
+                        game.walls_enabled = True  # Force walls on
+                        game.shrinking_wall_bounds = {
+                            'top': 0,
+                            'bottom': game.height - 1,
+                            'left': 0,
+                            'right': game.width - 1
+                        }
+                        game.last_wall_shrink = current_time
+                        print(f"Shrinking walls mode activated! {alive_count} players remaining.")
+
+                    # Update shrinking walls
+                    if game.shrinking_walls_active and alive_count > 0:
+                        # Determine shrink interval based on player count
+                        shrink_interval = 15.0 if alive_count == 3 else 10.0
+
+                        if current_time - game.last_wall_shrink >= shrink_interval:
+                            self.logic._shrink_walls(game)
+                            game.last_wall_shrink = current_time
                     if alive_count <= 1 and len(game.snakes) > 1:
                         game.state = GameState.FINISHED.value
                         for pid, s in game.snakes.items():
@@ -3204,8 +3547,48 @@ class NetworkGUIClient:
             text_surf = self.font.render(text, True, (255, 255, 255))
             self.screen.blit(text_surf, (10, status_y))
         else:
-            text = f"GAME OVER! Winner: {game.winner} | Press 'R' to restart | Press 'Q' to quit"
-            text_surf = self.font.render(text, True, (255, 255, 0))
+            # FINISHED state - Show FAT winner text and rankings
+            # Winner announcement with LARGE text
+            winner_font = pygame.font.Font(None, 120)
+            winner_text = f"{game.winner} WINS!"
+            winner_surf = winner_font.render(winner_text, True, (255, 215, 0))  # Gold color
+            winner_rect = winner_surf.get_rect(center=(self.screen_width // 2, 100))
+
+            # Add shadow for better visibility
+            shadow_surf = winner_font.render(winner_text, True, (0, 0, 0))
+            shadow_rect = shadow_surf.get_rect(center=(self.screen_width // 2 + 3, 103))
+            self.screen.blit(shadow_surf, shadow_rect)
+            self.screen.blit(winner_surf, winner_rect)
+
+            # Display rankings
+            rankings_font = pygame.font.Font(None, 48)
+            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+            y_offset = 200
+            for ranking in game.player_rankings[:3]:  # Show top 3
+                rank = ranking['rank']
+                name = ranking['player_name']
+                score = ranking['score']
+
+                # Get medal or rank number
+                medal = medals.get(rank, f"{rank}.")
+                rank_text = f"{medal} {name} - {score} points"
+
+                # Different font sizes for different ranks
+                if rank == 1:
+                    text_surf = rankings_font.render(rank_text, True, (255, 215, 0))  # Gold
+                elif rank == 2:
+                    text_surf = pygame.font.Font(None, 42).render(rank_text, True, (192, 192, 192))  # Silver
+                elif rank == 3:
+                    text_surf = pygame.font.Font(None, 38).render(rank_text, True, (205, 127, 50))  # Bronze
+
+                text_rect = text_surf.get_rect(center=(self.screen_width // 2, y_offset))
+                self.screen.blit(text_surf, text_rect)
+                y_offset += 60
+
+            # Instructions at bottom
+            text = "Press 'R' to restart | Press 'Q' to quit"
+            text_surf = self.font.render(text, True, (200, 200, 200))
             self.screen.blit(text_surf, (10, status_y))
         
         # Player list
