@@ -455,6 +455,8 @@ def make_app(server: "WebSnakeServer") -> web.Application:
         # Fallback: always serve index.html (single-page app)
         return web.FileResponse(os.path.join(web_dir, "index.html"))
 
+    # Explicit "/" route first (aiohttp may not match /{path:.*} on bare /)
+    app.router.add_get("/",         serve_static)
     app.router.add_get("/{path:.*}", serve_static)
 
     async def _start_loop(app):
