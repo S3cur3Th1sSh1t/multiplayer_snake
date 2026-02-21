@@ -473,7 +473,7 @@ def make_app(server: "WebSnakeServer") -> web.Application:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Snake Web Server")
     parser.add_argument("--host",     default="0.0.0.0")
-    parser.add_argument("--port",     type=int, default=8080)
+    parser.add_argument("--port",     type=int, default=8765)
     parser.add_argument("--mode",     choices=["classic", "kurve"], default="classic")
     parser.add_argument("--speed",    choices=["normal", "fast", "ultra"], default="normal")
     parser.add_argument("--no-walls", action="store_true")
