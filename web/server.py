@@ -391,13 +391,12 @@ class WebSnakeServer:
             interval = random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX) / alive
             g.next_weapon_spawn = now + max(1.0, interval)
 
-        # Shrinking walls
+        # Shrinking walls — only if walls are enabled AND shrinking is enabled
         alive = sum(1 for s in g.snakes.values() if s["alive"])
 
-        if getattr(g, "shrinking_walls_enabled", True):
+        if getattr(g, "shrinking_walls_enabled", True) and g.walls_enabled:
             if alive <= 3 and alive > 0 and not g.shrinking_walls_active:
                 g.shrinking_walls_active = True
-                g.walls_enabled = True
                 g.shrinking_wall_bounds = {
                     "top": 0, "bottom": g.height - 1,
                     "left": 0, "right": g.width - 1,

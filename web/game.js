@@ -47,6 +47,11 @@ const joinBtn           = document.getElementById("joinBtn");
 const startBtn          = document.getElementById("startBtn");
 const playerList        = document.getElementById("playerList");
 const spectatorBanner   = document.getElementById("spectatorBanner");
+const gameOverOverlay   = document.getElementById("gameOverOverlay");
+const gameOverTitle     = document.getElementById("gameOverTitle");
+const gameOverRankings  = document.getElementById("gameOverRankings");
+const gameOverTimer     = document.getElementById("gameOverTimer");
+const restartBtn        = document.getElementById("restartBtn");
 const hudStatus         = document.getElementById("hudStatus");
 const hudWeapons        = document.getElementById("hudWeapons");
 const hudScore          = document.getElementById("hudScore");
@@ -140,16 +145,14 @@ function onMessage(evt) {
     checkNewExplosions();
     updateUI();
 
-    // Close lobby when game starts
+    // Close lobby/gameover when game starts
     if (welcomed && !isSpectator &&
         (gameState.state === "running" || gameState.state === "countdown")) {
-      if (!lobbyOverlay.classList.contains("hidden")) {
-        showOverlay(null);
-      }
+      showOverlay(null);
     }
 
-    // Re-open lobby when game returns to waiting (restart)
-    if (welcomed && !isSpectator && gameState.state === "waiting") {
+    // Re-open lobby when game returns to waiting (manual or auto restart)
+    if (welcomed && gameState.state === "waiting") {
       nameSection.classList.add("hidden");
       lobbySection.classList.remove("hidden");
       showOverlay("lobby");
@@ -176,9 +179,11 @@ function resizeCanvasIfNeeded(prev) {
 function showOverlay(which) {
   connectingOverlay.classList.add("hidden");
   lobbyOverlay.classList.add("hidden");
+  gameOverOverlay.classList.add("hidden");
 
   if (which === "connecting") connectingOverlay.classList.remove("hidden");
-  else if (which === "lobby") lobbyOverlay.classList.remove("hidden");
+  else if (which === "lobby")  lobbyOverlay.classList.remove("hidden");
+  else if (which === "gameover") gameOverOverlay.classList.remove("hidden");
 }
 
 function isTouchDevice() {
@@ -201,6 +206,12 @@ function updateUI() {
     spectatorBanner.classList.remove("hidden");
   }
 
+  // Game-over overlay
+  if (gameState.state === "finished") {
+    updateGameOverOverlay();
+    showOverlay("gameover");
+  }
+
   // HUD
   updateHUD();
 }
@@ -218,6 +229,29 @@ function renderPlayerList() {
       <span>${escHtml(s.player_name)}</span>
     </div>`;
   }).join("");
+}
+
+function updateGameOverOverlay() {
+  const g = gameState;
+  const medals = ["🥇","🥈","🥉"];
+
+  gameOverTitle.textContent = g.winner ? `🏆 ${g.winner} wins!` : "Game Over";
+
+  gameOverRankings.innerHTML = (g.player_rankings || []).slice(0, 5).map((r, i) => {
+    const medal = medals[i] || `#${i+1}`;
+    const color = i === 0 ? "#ffd700" : i === 1 ? "#c0c0c0" : i === 2 ? "#cd7f32" : "#aaa";
+    return `<div style="color:${color}">${medal} &nbsp;${escHtml(r.player_name)} &nbsp;– &nbsp;${r.score} pts</div>`;
+  }).join("");
+
+  const autoIn = g.auto_restart_in;
+  if (autoIn != null && autoIn > 0) {
+    gameOverTimer.textContent = `Auto-returning to lobby in ${autoIn}s…`;
+  } else {
+    gameOverTimer.textContent = "";
+  }
+
+  // Spectators can't restart
+  restartBtn.style.display = isSpectator ? "none" : "";
 }
 
 function escHtml(s) {
@@ -360,11 +394,6 @@ function render() {
   // ── Countdown overlay
   if (g.state === "countdown" && g.countdown > 0) {
     drawCountdown(g.countdown, cs);
-  }
-
-  // ── Winner overlay
-  if (g.state === "finished") {
-    drawWinnerScreen(g, cs);
   }
 
   // ── Waiting: player names on canvas
@@ -878,7 +907,8 @@ nameInput.addEventListener("keydown", e => {
   if (e.key === "Enter") tryJoin();
 });
 
-startBtn.addEventListener("click", () => send({ type: "start" }));
+startBtn.addEventListener("click",   () => send({ type: "start" }));
+restartBtn.addEventListener("click", () => send({ type: "restart" }));
 
 // ─── Settings panel ───────────────────────────────────────────────────────────
 

@@ -304,5 +304,10 @@ html, body {
   font-weight: 700;
 }
 
+/* Game-over overlay rankings */
+#gameOverTitle  { font-size: 1.6rem; margin-bottom: 8px; }
+#gameOverRankings { text-align: left; margin: 8px 0; font-size: .9rem; line-height: 1.8; }
+#gameOverTimer  { font-size: .85rem; color: #ffea00; min-height: 1.2em; }
+
 /* Hidden utility */
 .hidden { display: none !important; }
