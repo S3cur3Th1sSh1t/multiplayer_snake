@@ -437,16 +437,25 @@ class WebSnakeServer:
 def make_app(server: "WebSnakeServer") -> web.Application:
     app = web.Application()
 
-    # WebSocket endpoint
+    # WebSocket endpoint (must be registered before the catch-all)
     app.router.add_get("/ws", server.ws_handler)
 
-    # Static files (index.html, style.css, game.js …)
+    # Static file handler — serves everything else from the web/ directory
     web_dir = os.path.dirname(os.path.abspath(__file__))
-    app.router.add_get(
-        "/",
-        lambda r: web.FileResponse(os.path.join(web_dir, "index.html")),
-    )
-    app.router.add_static("/", web_dir, show_index=False)
+
+    async def serve_static(request: web.Request) -> web.Response:
+        # Strip leading slash; empty path → index.html
+        rel = request.path.lstrip("/") or "index.html"
+        # Safety: prevent directory traversal
+        filepath = os.path.normpath(os.path.join(web_dir, rel))
+        if not filepath.startswith(web_dir + os.sep) and filepath != web_dir:
+            raise web.HTTPForbidden()
+        if os.path.isfile(filepath):
+            return web.FileResponse(filepath)
+        # Fallback: always serve index.html (single-page app)
+        return web.FileResponse(os.path.join(web_dir, "index.html"))
+
+    app.router.add_get("/{path:.*}", serve_static)
 
     async def _start_loop(app):
         asyncio.create_task(server.game_loop())
