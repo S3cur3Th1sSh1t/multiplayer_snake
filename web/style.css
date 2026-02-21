@@ -259,5 +259,50 @@ html, body {
   /* For true portrait phones, show hint automatically via JS */
 }
 
+/* Settings panel */
+#settingsPanel {
+  margin: 10px 0 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  text-align: left;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+.settings-label {
+  width: 44px;
+  font-size: .8rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.settings-btns {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.sbtn {
+  padding: 4px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: .78rem;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.sbtn:hover { border-color: var(--accent); color: var(--text); }
+.sbtn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #000;
+  font-weight: 700;
+}
+
 /* Hidden utility */
 .hidden { display: none !important; }

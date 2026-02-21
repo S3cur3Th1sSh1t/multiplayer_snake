@@ -244,6 +244,42 @@ class WebSnakeServer:
         await self.broadcast_state()
         log.info("Game restarted – back to WAITING")
 
+    async def handle_settings(self, player_id: str, msg: dict):
+        """Allow any lobby player to change game settings before start."""
+        client = self.clients.get(player_id)
+        if not client or client.spectator:
+            return
+        if self.game.state != GameState.WAITING.value:
+            return   # settings locked once game starts
+
+        changed = False
+        mode  = msg.get("mode")
+        speed = msg.get("speed")
+        walls = msg.get("walls")
+
+        if mode in ("classic", "kurve") and mode != self.game.mode:
+            self.game.mode = mode
+            self.logic.mode = mode
+            changed = True
+            log.info(f"Mode → {mode} (by {client.name})")
+
+        if speed in ("normal", "fast", "ultra") and speed != self.game.speed:
+            self.game.speed = speed
+            self.logic.speed = speed
+            changed = True
+            log.info(f"Speed → {speed} (by {client.name})")
+
+        if walls is not None:
+            walls_bool = bool(walls) if isinstance(walls, bool) else str(walls).lower() == "true"
+            if walls_bool != self.game.walls_enabled:
+                self.game.walls_enabled = walls_bool
+                self.logic.walls_enabled = walls_bool
+                changed = True
+                log.info(f"Walls → {walls_bool} (by {client.name})")
+
+        if changed:
+            await self.broadcast_state()
+
     async def handle_message(self, player_id: str, data: str):
         try:
             msg = json.loads(data)
@@ -251,10 +287,11 @@ class WebSnakeServer:
             return
 
         t = msg.get("type", "")
-        if   t == "join":    await self.handle_join(player_id, msg)
-        elif t == "start":   await self.handle_start(player_id)
-        elif t == "input":   await self.handle_input(player_id, msg)
-        elif t == "restart": await self.handle_restart(player_id)
+        if   t == "join":     await self.handle_join(player_id, msg)
+        elif t == "start":    await self.handle_start(player_id)
+        elif t == "input":    await self.handle_input(player_id, msg)
+        elif t == "restart":  await self.handle_restart(player_id)
+        elif t == "settings": await self.handle_settings(player_id, msg)
 
     # ------------------------------------------------------------------ game loop
 

@@ -191,6 +191,9 @@ function updateUI() {
     renderPlayerList();
   }
 
+  // Sync settings buttons to server state
+  syncSettingsUI();
+
   // Spectator banner
   if (isSpectator) {
     spectatorBanner.classList.remove("hidden");
@@ -232,7 +235,8 @@ function updateHUD() {
     finished:  "🏁 FINISHED",
   }[gameState.state] || gameState.state;
 
-  hudStatus.textContent = stateLabel;
+  const walls = gameState.walls_enabled ? "walls" : "wrap";
+  hudStatus.textContent = `${stateLabel}  ·  ${gameState.mode}  ·  ${gameState.speed}  ·  ${walls}`;
 
   // Weapon queue for my snake
   const mySnake = gameState.snakes?.[myPlayerId];
@@ -867,6 +871,48 @@ nameInput.addEventListener("keydown", e => {
 });
 
 startBtn.addEventListener("click", () => send({ type: "start" }));
+
+// ─── Settings panel ───────────────────────────────────────────────────────────
+
+/**
+ * Sync the active state of setting buttons to the current game state.
+ * Called whenever a new state arrives from the server.
+ */
+function syncSettingsUI() {
+  if (!gameState) return;
+  setActiveBtn("settingMode",  gameState.mode);
+  setActiveBtn("settingSpeed", gameState.speed);
+  setActiveBtn("settingWalls", String(gameState.walls_enabled));
+}
+
+function setActiveBtn(groupId, value) {
+  const group = document.getElementById(groupId);
+  if (!group) return;
+  group.querySelectorAll(".sbtn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.value === String(value));
+  });
+}
+
+// Wire each settings button to send a settings message
+document.querySelectorAll("#settingsPanel .sbtn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (isSpectator) return;
+    if (!gameState || gameState.state !== "waiting") return;
+
+    const groupId = btn.closest(".settings-btns").id;
+    const value   = btn.dataset.value;
+
+    const msg = { type: "settings" };
+    if      (groupId === "settingMode")  msg.mode  = value;
+    else if (groupId === "settingSpeed") msg.speed = value;
+    else if (groupId === "settingWalls") msg.walls = value === "true";
+
+    send(msg);
+
+    // Optimistic UI: mark this button active immediately
+    setActiveBtn(groupId, value);
+  });
+});
 
 // ─── Portrait detection ───────────────────────────────────────────────────────
 

@@ -34,6 +34,33 @@
 
     <div id="lobbySection" class="hidden">
       <div id="playerList"></div>
+
+      <!-- Settings (only visible to lobby players, not spectators) -->
+      <div id="settingsPanel">
+        <div class="settings-row">
+          <span class="settings-label">Mode</span>
+          <div class="settings-btns" id="settingMode">
+            <button class="sbtn active" data-value="classic">Classic</button>
+            <button class="sbtn" data-value="kurve">Kurve</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Speed</span>
+          <div class="settings-btns" id="settingSpeed">
+            <button class="sbtn active" data-value="normal">Normal</button>
+            <button class="sbtn" data-value="fast">Fast</button>
+            <button class="sbtn" data-value="ultra">Ultra</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Walls</span>
+          <div class="settings-btns" id="settingWalls">
+            <button class="sbtn active" data-value="true">On</button>
+            <button class="sbtn" data-value="false">Off (wrap)</button>
+          </div>
+        </div>
+      </div>
+
       <p class="hint">Press <kbd>S</kbd> or tap <strong>Start</strong> when ready</p>
       <button id="startBtn" class="btn-primary">▶ Start Game</button>
     </div>
