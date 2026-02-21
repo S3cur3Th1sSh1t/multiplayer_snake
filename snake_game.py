@@ -90,6 +90,13 @@ GHOST_DURATION = 5.0  # How long invisibility lasts in seconds
 # Weapon types
 WEAPON_BOMB = "bomb"
 WEAPON_GHOST = "ghost"
+WEAPON_SHOTGUN = "shotgun"
+WEAPON_NUCLEAR = "nuclear"
+SHOTGUN_BURST_COUNT = 10       # shots in a burst
+SHOTGUN_BURST_INTERVAL = 0.2   # seconds between shots
+NUCLEAR_EXPLOSION_HALF = 5     # half-size of 10x10 explosion area
+SHOTGUN_SYMBOL = "S"           # terminal symbol for shotgun pickup
+NUCLEAR_SYMBOL = "N"           # terminal symbol for nuclear pickup
 
 # Speed settings (tick rate in seconds)
 SPEED_SETTINGS = {
@@ -111,7 +118,7 @@ MAX_MESSAGE_SIZE = 65536  # Max 64KB per message
 MAX_CONNECTIONS = 50  # Max simultaneous TCP connections
 MAX_MESSAGES_PER_SECOND = 30  # Rate limiting per client
 PASSWORD_LENGTH = 15  # Random password length
-VALID_ACTIONS = {'UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE', 'GHOST'}  # Valid player actions
+VALID_ACTIONS = {'UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE'}  # Valid player actions
 
 # Private IP ranges (RFC 1918 + localhost)
 PRIVATE_IP_PREFIXES = ('10.', '172.16.', '172.17.', '172.18.', '172.19.',
@@ -220,6 +227,8 @@ class GameData:
     foods: List[List[int]] = field(default_factory=list)
     weapons: List[List[int]] = field(default_factory=list)  # Bomb pickups: [x, y]
     ghost_pickups: List[List[int]] = field(default_factory=list)  # Ghost pickups: [x, y]
+    shotgun_pickups: List[List[int]] = field(default_factory=list)
+    nuclear_pickups: List[List[int]] = field(default_factory=list)
     bombs: List[Dict] = field(default_factory=list)
     explosions: List[Dict] = field(default_factory=list)  # For visual effects
     host_id: str = ""
@@ -545,8 +554,9 @@ class SnakeGameLogic:
             'body': initial_body,
             'direction': direction.value,
             'alive': True,
-            'has_weapon': False,  # Bomb weapon
-            'has_ghost': False,   # Ghost weapon
+            'weapon_queue': [],
+            'shotgun_shots_remaining': 0,
+            'shotgun_next_fire': 0.0,
             'is_invisible': False,
             'invisible_until': 0,  # Timestamp when invisibility ends
             'score': 0,
@@ -586,9 +596,33 @@ class SnakeGameLogic:
         while attempts > 0:
             x = random.randint(2, game.width - 2)
             y = random.randint(2, game.height - 2)
-            
+
             if not self._is_position_occupied(game, x, y):
                 game.ghost_pickups.append([x, y])
+                return
+            attempts -= 1
+    
+    def _spawn_shotgun(self, game: GameData):
+        """Spawn a shotgun pickup"""
+        attempts = 100
+        while attempts > 0:
+            x = random.randint(2, game.width - 2)
+            y = random.randint(2, game.height - 2)
+            
+            if not self._is_position_occupied(game, x, y):
+                game.shotgun_pickups.append([x, y])
+                return
+            attempts -= 1
+    
+    def _spawn_nuclear(self, game: GameData):
+        """Spawn a nuclear pickup"""
+        attempts = 100
+        while attempts > 0:
+            x = random.randint(2, game.width - 2)
+            y = random.randint(2, game.height - 2)
+            
+            if not self._is_position_occupied(game, x, y):
+                game.nuclear_pickups.append([x, y])
                 return
             attempts -= 1
     
@@ -609,6 +643,14 @@ class SnakeGameLogic:
         
         for ghost in game.ghost_pickups:
             if ghost[0] == x and ghost[1] == y:
+                return True
+        
+        for pickup in game.shotgun_pickups:
+            if pickup[0] == x and pickup[1] == y:
+                return True
+        
+        for pickup in game.nuclear_pickups:
+            if pickup[0] == x and pickup[1] == y:
                 return True
         
         return False
@@ -665,10 +707,8 @@ class SnakeGameLogic:
                     snake['direction'] = Direction.LEFT.value
                 elif action == 'RIGHT' and current_dir != Direction.LEFT:
                     snake['direction'] = Direction.RIGHT.value
-                elif action == 'FIRE' and snake.get('has_weapon'):
-                    self._fire_weapon(game, snake)
-                elif action == 'GHOST' and snake.get('has_ghost'):
-                    self._activate_ghost(game, snake, current_time)
+                elif action == 'FIRE' and snake.get('weapon_queue'):
+                    self._fire_weapon(game, snake, current_time)
         
         # Update invisibility status
         for player_id, snake in game.snakes.items():
@@ -686,6 +726,9 @@ class SnakeGameLogic:
         
         # Update explosions (visual effect decay)
         self._update_explosions(game)
+
+        # Update shotgun bursts
+        self._update_shotgun_bursts(game, current_time)
         
         # Check collisions
         self._check_collisions(game)
@@ -693,13 +736,23 @@ class SnakeGameLogic:
         # Update rankings after collisions
         self._update_rankings(game)
 
-        # Spawn weapons (alternating between bomb and ghost)
+        # Spawn weapons
         if current_time >= game.next_weapon_spawn:
-            if random.random() < 0.5:
+            _weapon_choice = random.choices(
+                ['bomb', 'ghost', 'shotgun', 'nuclear'],
+                weights=[1.0, 1.0, 1.0, 0.3]
+            )[0]
+            if _weapon_choice == 'bomb':
                 self._spawn_weapon(game)
-            else:
+            elif _weapon_choice == 'ghost':
                 self._spawn_ghost(game)
-            game.next_weapon_spawn = current_time + random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX)
+            elif _weapon_choice == 'shotgun':
+                self._spawn_shotgun(game)
+            elif _weapon_choice == 'nuclear':
+                self._spawn_nuclear(game)
+            alive_count = max(1, sum(1 for s in game.snakes.values() if s['alive']))
+            _interval = random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX) / alive_count
+            game.next_weapon_spawn = current_time + max(1.0, _interval)
 
         # Check winner
         alive_count = sum(1 for s in game.snakes.values() if s['alive'])
@@ -781,7 +834,7 @@ class SnakeGameLogic:
         for weapon in game.weapons:
             if weapon[0] == new_head[0] and weapon[1] == new_head[1]:
                 weapon_to_remove = weapon
-                snake['has_weapon'] = True
+                snake['weapon_queue'].append('bomb')
                 break
         
         if weapon_to_remove:
@@ -792,11 +845,33 @@ class SnakeGameLogic:
         for ghost in game.ghost_pickups:
             if ghost[0] == new_head[0] and ghost[1] == new_head[1]:
                 ghost_to_remove = ghost
-                snake['has_ghost'] = True
+                snake['weapon_queue'].append('ghost')
                 break
         
         if ghost_to_remove:
             game.ghost_pickups.remove(ghost_to_remove)
+        
+        # Shotgun pickup
+        shotgun_to_remove = None
+        for pickup in game.shotgun_pickups:
+            if pickup[0] == new_head[0] and pickup[1] == new_head[1]:
+                shotgun_to_remove = pickup
+                snake['weapon_queue'].append('shotgun')
+                break
+        
+        if shotgun_to_remove:
+            game.shotgun_pickups.remove(shotgun_to_remove)
+        
+        # Nuclear pickup
+        nuclear_to_remove = None
+        for pickup in game.nuclear_pickups:
+            if pickup[0] == new_head[0] and pickup[1] == new_head[1]:
+                nuclear_to_remove = pickup
+                snake['weapon_queue'].append('nuclear')
+                break
+        
+        if nuclear_to_remove:
+            game.nuclear_pickups.remove(nuclear_to_remove)
         
         # Remove tail based on mode
         if game.mode == GameMode.KURVE.value:
@@ -805,9 +880,13 @@ class SnakeGameLogic:
             if not ate_food:
                 snake['body'].pop()
     
-    def _fire_weapon(self, game: GameData, snake: dict):
-        """Fire a bomb"""
-        snake['has_weapon'] = False
+    def _fire_weapon(self, game: GameData, snake: dict, current_time=None):
+        """Fire the next weapon in the queue"""
+        weapon_queue = snake.get('weapon_queue', [])
+        if not weapon_queue:
+            return
+        
+        weapon = weapon_queue.pop(0)
         head_x, head_y = snake['body'][0][0], snake['body'][0][1]
         direction = Direction(snake['direction'])
         
@@ -820,18 +899,35 @@ class SnakeGameLogic:
         else:
             start_x, start_y = head_x + 1, head_y
         
-        bomb = {
-            'x': start_x,
-            'y': start_y,
-            'direction': snake['direction'],
-            'owner_id': snake['player_id'],
-            'remaining_range': BOMB_RANGE
-        }
-        game.bombs.append(bomb)
+        if weapon == 'bomb':
+            bomb = {
+                'x': start_x,
+                'y': start_y,
+                'direction': snake['direction'],
+                'owner_id': snake['player_id'],
+                'remaining_range': BOMB_RANGE,
+                'weapon_type': 'bomb'
+            }
+            game.bombs.append(bomb)
+        elif weapon == 'ghost':
+            self._activate_ghost(game, snake, current_time or time.time())
+        elif weapon == 'shotgun':
+            t = current_time or time.time()
+            snake['shotgun_shots_remaining'] = SHOTGUN_BURST_COUNT
+            snake['shotgun_next_fire'] = t
+        elif weapon == 'nuclear':
+            bomb = {
+                'x': start_x,
+                'y': start_y,
+                'direction': snake['direction'],
+                'owner_id': snake['player_id'],
+                'remaining_range': 999999,
+                'weapon_type': 'nuclear'
+            }
+            game.bombs.append(bomb)
     
     def _activate_ghost(self, game: GameData, snake: dict, current_time: float):
         """Activate ghost mode (invisibility)"""
-        snake['has_ghost'] = False
         snake['is_invisible'] = True
         snake['invisible_until'] = current_time + GHOST_DURATION
     
@@ -841,6 +937,7 @@ class SnakeGameLogic:
         
         for i, bomb in enumerate(game.bombs):
             bomb_exploded = False
+            weapon_type = bomb.get('weapon_type', 'bomb')
             
             for _ in range(BOMB_SPEED):
                 if bomb_exploded:
@@ -860,12 +957,43 @@ class SnakeGameLogic:
                 
                 bomb['remaining_range'] -= 1
 
-                # Check wall collision (only if walls enabled)
+                if weapon_type == 'nuclear':
+                    # Nuclear bombs always wrap around, never hit walls
+                    if bomb['x'] <= 0:
+                        bomb['x'] = game.width - 2
+                    elif bomb['x'] >= game.width - 1:
+                        bomb['x'] = 1
+                    if bomb['y'] <= 0:
+                        bomb['y'] = game.height - 2
+                    elif bomb['y'] >= game.height - 1:
+                        bomb['y'] = 1
+                    
+                    # Check 2x2 hit area
+                    hit = False
+                    for player_id, snake in game.snakes.items():
+                        for seg in snake['body']:
+                            if (seg[0] in (bomb['x'], bomb['x']+1) and
+                                seg[1] in (bomb['y'], bomb['y']+1)):
+                                hit = True
+                                break
+                        if hit:
+                            break
+                    
+                    if hit:
+                        self._nuclear_explosion(game, bomb['x'], bomb['y'])
+                        bomb_exploded = True
+                        if i not in bombs_to_remove:
+                            bombs_to_remove.append(i)
+                        break
+                    
+                    # Nuclear never expires from range
+                    continue
+                
+                # Check wall collision (only if walls enabled, not nuclear)
                 if game.walls_enabled:
                     wall_hit = False
 
                     if game.shrinking_walls_active:
-                        # Check shrinking wall collision
                         bounds = game.shrinking_wall_bounds
                         if bomb['y'] == bounds['top'] or bomb['y'] == bounds['bottom']:
                             if bounds['left'] <= bomb['x'] <= bounds['right']:
@@ -877,7 +1005,6 @@ class SnakeGameLogic:
                                     wall_hit = True
 
                         if wall_hit:
-                            # Destroy wall segment
                             game.destroyed_wall_segments.append([bomb['x'], bomb['y']])
                             self._create_explosion(game, bomb['x'], bomb['y'])
                             bomb_exploded = True
@@ -885,10 +1012,8 @@ class SnakeGameLogic:
                                 bombs_to_remove.append(i)
                             break
                     else:
-                        # Normal wall collision at map edges
                         if (bomb['x'] <= 0 or bomb['x'] >= game.width - 1 or
                             bomb['y'] <= 0 or bomb['y'] >= game.height - 1):
-                            # Bomb hits wall - create explosion
                             self._create_explosion(game, bomb['x'], bomb['y'])
                             bomb_exploded = True
                             if i not in bombs_to_remove:
@@ -914,18 +1039,22 @@ class SnakeGameLogic:
                             break
                     
                     if hit_index >= 0:
-                        # Create explosion effect
                         self._create_explosion(game, bomb['x'], bomb['y'])
                         
-                        # Remove BOMB_DAMAGE segments starting from hit point
-                        segments_removed = 0
-                        while segments_removed < BOMB_DAMAGE and hit_index < len(snake['body']) and len(snake['body']) > 1:
-                            snake['body'].pop(hit_index)
-                            segments_removed += 1
-                        
-                        # If snake is too short, it dies
-                        if len(snake['body']) < 2:
-                            snake['alive'] = False
+                        if weapon_type == 'shotgun':
+                            # Shotgun removes exactly 1 segment
+                            if len(snake['body']) > 1:
+                                snake['body'].pop(hit_index)
+                            if len(snake['body']) < 2:
+                                snake['alive'] = False
+                        else:
+                            # Normal bomb removes BOMB_DAMAGE segments
+                            segments_removed = 0
+                            while segments_removed < BOMB_DAMAGE and hit_index < len(snake['body']) and len(snake['body']) > 1:
+                                snake['body'].pop(hit_index)
+                                segments_removed += 1
+                            if len(snake['body']) < 2:
+                                snake['alive'] = False
                         
                         bomb_exploded = True
                         if i not in bombs_to_remove:
@@ -944,7 +1073,6 @@ class SnakeGameLogic:
         for i in sorted(bombs_to_remove, reverse=True):
             if i < len(game.bombs):
                 game.bombs.pop(i)
-    
     def _create_explosion(self, game: GameData, x: int, y: int):
         """Create an explosion effect"""
         explosion = {
@@ -954,6 +1082,18 @@ class SnakeGameLogic:
             'ttl': 5  # Time to live in ticks
         }
         game.explosions.append(explosion)
+
+    def _nuclear_explosion(self, game: GameData, cx: int, cy: int):
+        """Create nuclear explosion - large area damage"""
+        game.explosions.append({'x': cx, 'y': cy, 'radius': NUCLEAR_EXPLOSION_HALF, 'ttl': 10, 'is_nuclear': True})
+        half = NUCLEAR_EXPLOSION_HALF
+        for player_id, snake in game.snakes.items():
+            new_body = [seg for seg in snake['body']
+                        if not (cx - half <= seg[0] <= cx + half and cy - half <= seg[1] <= cy + half)]
+            if len(new_body) < len(snake['body']):
+                snake['body'] = new_body
+                if len(snake['body']) < 2 and snake.get('alive', True):
+                    snake['alive'] = False
     
     def _update_explosions(self, game: GameData):
         """Update explosion effects"""
@@ -1013,16 +1153,16 @@ class SnakeGameLogic:
             if not snake['alive']:
                 continue
 
-            # Other snake collision (dead snakes are now obstacles, skip only invisible snakes)
+            # Other snake collision
+            # Ghost snake passes through others without dying
+            if snake.get('is_invisible', False):
+                continue
+
             for other_id, other_snake in game.snakes.items():
                 if other_id == player_id:
                     continue
 
-                # Don't collide with invisible snakes (ghost mode)
-                if other_snake.get('is_invisible', False):
-                    continue
-
-                # Collide with ALL other snakes (alive or dead)
+                # Collide with ALL other snakes (alive or dead, including invisible)
                 for segment in other_snake['body']:
                     if head_x == segment[0] and head_y == segment[1]:
                         snake['alive'] = False
@@ -1069,6 +1209,35 @@ class SnakeGameLogic:
             bounds['bottom'] = min(game.height - 1, bounds['top'] + 10)
 
         print(f"Walls shrunk! New bounds: top={bounds['top']}, bottom={bounds['bottom']}, left={bounds['left']}, right={bounds['right']}")
+
+
+    def _update_shotgun_bursts(self, game: GameData, current_time: float):
+        """Fire queued shotgun burst shots"""
+        for player_id, snake in game.snakes.items():
+            if not snake.get('alive', True):
+                continue
+            if snake.get('shotgun_shots_remaining', 0) > 0:
+                if current_time >= snake.get('shotgun_next_fire', 0):
+                    head_x, head_y = snake['body'][0][0], snake['body'][0][1]
+                    direction = Direction(snake['direction'])
+                    if direction == Direction.UP:
+                        sx, sy = head_x, head_y - 1
+                    elif direction == Direction.DOWN:
+                        sx, sy = head_x, head_y + 1
+                    elif direction == Direction.LEFT:
+                        sx, sy = head_x - 1, head_y
+                    else:
+                        sx, sy = head_x + 1, head_y
+                    bullet = {
+                        'x': sx, 'y': sy,
+                        'direction': snake['direction'],
+                        'owner_id': snake['player_id'],
+                        'remaining_range': BOMB_RANGE,
+                        'weapon_type': 'shotgun'
+                    }
+                    game.bombs.append(bullet)
+                    snake['shotgun_shots_remaining'] -= 1
+                    snake['shotgun_next_fire'] = current_time + SHOTGUN_BURST_INTERVAL
 
 
 # =============================================================================
@@ -1595,10 +1764,6 @@ class GameServer:
         with self.inputs_lock:
             self.pending_inputs.clear()
 
-        # Start countdown if players are present
-        if len(self.game.snakes) > 0:
-            self._start_countdown()
-
         print(f"Game restarted with {len(player_info)} players")
     
     def _update_countdown(self):
@@ -1642,10 +1807,8 @@ class GameServer:
                 snake['direction'] = Direction.LEFT.value
             elif action == 'RIGHT' and current_dir != Direction.LEFT:
                 snake['direction'] = Direction.RIGHT.value
-            elif action == 'FIRE' and snake.get('has_weapon'):
-                self.logic._fire_weapon(self.game, snake)
-            elif action == 'GHOST' and snake.get('has_ghost'):
-                self.logic._activate_ghost(self.game, snake, current_time)
+            elif action == 'FIRE' and snake.get('weapon_queue'):
+                self.logic._fire_weapon(self.game, snake, current_time)
     
     def _update_game(self):
         """Update game state"""
@@ -1667,6 +1830,9 @@ class GameServer:
         
         # Update explosions
         self.logic._update_explosions(self.game)
+
+        # Update shotgun bursts
+        self.logic._update_shotgun_bursts(self.game, current_time)
         
         # Check collisions
         self.logic._check_collisions(self.game)
@@ -1676,11 +1842,21 @@ class GameServer:
 
         # Spawn weapons
         if current_time >= self.game.next_weapon_spawn:
-            if random.random() < 0.5:
+            _weapon_choice = random.choices(
+                ['bomb', 'ghost', 'shotgun', 'nuclear'],
+                weights=[1.0, 1.0, 1.0, 0.3]
+            )[0]
+            if _weapon_choice == 'bomb':
                 self.logic._spawn_weapon(self.game)
-            else:
+            elif _weapon_choice == 'ghost':
                 self.logic._spawn_ghost(self.game)
-            self.game.next_weapon_spawn = current_time + random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX)
+            elif _weapon_choice == 'shotgun':
+                self.logic._spawn_shotgun(self.game)
+            elif _weapon_choice == 'nuclear':
+                self.logic._spawn_nuclear(self.game)
+            alive_count = max(1, sum(1 for s in self.game.snakes.values() if s['alive']))
+            _interval = random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX) / alive_count
+            self.game.next_weapon_spawn = current_time + max(1.0, _interval)
 
         # Check winner
         alive_count = sum(1 for s in self.game.snakes.values() if s['alive'])
@@ -1737,20 +1913,25 @@ class GameServer:
         
         self.game.tick += 1
     
+    def _filter_state_for_client(self, game_dict: dict, client_player_id: str) -> dict:
+        """Filter game state to prevent cheating - hide invisible snake positions from non-owners"""
+        import copy
+        filtered = copy.deepcopy(game_dict)
+        for pid, snake in filtered.get('snakes', {}).items():
+            if snake.get('is_invisible', False) and pid != client_player_id:
+                snake['body'] = []
+        return filtered
+
     def _broadcast_state(self):
         """Send game state to all clients via UDP (fast) with TCP fallback"""
-        state_msg = {
-            'type': 'state',
-            'game': asdict(self.game)
-        }
-        
         # Use UDP for fast broadcasting (may be blocked by firewall)
         try:
-            data = NetworkProtocol.encode_udp(state_msg)
-            
             with self.udp_lock:
                 for player_id, udp_addr in list(self.udp_clients.items()):
                     try:
+                        filtered_game = self._filter_state_for_client(asdict(self.game), player_id)
+                        filtered_msg = {'type': 'state', 'game': filtered_game}
+                        data = NetworkProtocol.encode_udp(filtered_msg)
                         self.udp_socket.sendto(data, udp_addr)
                         debug_print(f"SERVER: Sent {len(data)} bytes UDP to {udp_addr}")
                     except Exception as e:
@@ -1758,14 +1939,14 @@ class GameServer:
         except Exception as e:
             debug_print(f"SERVER: UDP broadcast error: {e}")
         
-        # Also send via TCP as fallback (in case UDP is blocked by firewall)
-        # Only send every Nth tick to reduce TCP overhead, or always during WAITING state
+        # Also send via TCP as fallback
         should_send_tcp = (self.game.tick % 3 == 0) or (self.game.state == GameState.WAITING.value)
         if should_send_tcp:
             disconnected = []
             for player_id, client in list(self.clients.items()):
                 if client.get('joined'):
-                    if not self._send_to_client(player_id, state_msg):
+                    filtered_msg = {'type': 'state', 'game': self._filter_state_for_client(asdict(self.game), player_id)}
+                    if not self._send_to_client(player_id, filtered_msg):
                         debug_print(f"Failed to send state to {player_id[:12]}, marking for disconnect")
                         disconnected.append(player_id)
             
@@ -2164,13 +2345,25 @@ class NetworkTerminalClient:
             x, y = ghost[0], ghost[1]
             if 0 < y < self.height - 1 and 0 < x < self.width - 1:
                 new_buffer[(x, y)] = (GHOST_SYMBOL, curses.color_pair(12) | curses.A_BOLD)
+
+        # Draw shotgun pickups
+        for pickup in game.shotgun_pickups:
+            x, y = pickup[0], pickup[1]
+            if 0 < y < self.height - 1 and 0 < x < self.width - 1:
+                new_buffer[(x, y)] = (SHOTGUN_SYMBOL, curses.color_pair(12) | curses.A_BOLD)
         
+        # Draw nuclear pickups
+        for pickup in game.nuclear_pickups:
+            x, y = pickup[0], pickup[1]
+            if 0 < y < self.height - 1 and 0 < x < self.width - 1:
+                new_buffer[(x, y)] = (NUCLEAR_SYMBOL, curses.color_pair(12) | curses.A_BOLD)
+
         # Draw bombs
         for bomb in game.bombs:
             x, y = bomb['x'], bomb['y']
             if 0 < y < self.height - 1 and 0 < x < self.width - 1:
                 new_buffer[(x, y)] = (BOMB_SYMBOL, curses.color_pair(13) | curses.A_BOLD)
-        
+
         # Draw snakes
         for player_id, snake in game.snakes.items():
             color = curses.color_pair(snake['color'] + 1)
@@ -2254,13 +2447,13 @@ class NetworkTerminalClient:
                 status = f" >>> STARTING IN {game.countdown} <<< "
             elif game.state == GameState.RUNNING.value:
                 my_snake = game.snakes.get(self.client.player_id, {})
-                weapon_status = ""
-                if my_snake.get('has_weapon'):
-                    weapon_status += " [BOMB:SPACE]"
-                if my_snake.get('has_ghost'):
-                    weapon_status += " [GHOST:G]"
+                weapon_queue = my_snake.get('weapon_queue', [])
+                if weapon_queue:
+                    weapon_status = " [SPACE: " + ">".join(w[:3].upper() for w in weapon_queue) + "]"
+                else:
+                    weapon_status = ""
                 if my_snake.get('is_invisible'):
-                    weapon_status += " [INVISIBLE!]"
+                    weapon_status += " [GHOST ACTIVE!]"
                 alive_status = "ALIVE" if my_snake.get('alive', False) else "DEAD (spectating)"
                 score = my_snake.get('score', 0)
                 status = f" Score: {score} | {alive_status}{weapon_status} | Speed: {game.speed.upper()}"
@@ -2281,17 +2474,14 @@ class NetworkTerminalClient:
                 self.stdscr.addstr(status_y, 0, status[:self.width-1])
             except:
                 pass
-        
+
         if status_y + 1 < self.height:
             players_str = " Players: "
             for pid, snake in game.snakes.items():
                 name = snake['player_name'][:6]
                 status_char = "+" if snake['alive'] else "-"
-                weapon_char = ""
-                if snake.get('has_weapon'):
-                    weapon_char += "[B]"
-                if snake.get('has_ghost'):
-                    weapon_char += "[G]"
+                wq = snake.get('weapon_queue', [])
+                weapon_char = "[" + ",".join(w[:1].upper() for w in wq) + "]" if wq else ""
                 if snake.get('is_invisible'):
                     weapon_char += "[!]"
                 players_str += f"{status_char}{name}({snake['score']}){weapon_char} "
@@ -2299,7 +2489,7 @@ class NetworkTerminalClient:
                 self.stdscr.addstr(status_y + 1, 0, players_str[:self.width-1])
             except:
                 pass
-        
+
         self.stdscr.refresh()
     
     def handle_input(self) -> Optional[str]:
@@ -2308,11 +2498,11 @@ class NetworkTerminalClient:
             key = self.stdscr.getch()
         except:
             return None
-        
+
         if key == ord('q') or key == ord('Q'):
             self.running = False
             return 'QUIT'
-        
+
         if key == curses.KEY_UP:
             return 'UP'
         elif key == curses.KEY_DOWN:
@@ -2323,13 +2513,11 @@ class NetworkTerminalClient:
             return 'RIGHT'
         elif key == ord(' '):
             return 'FIRE'
-        elif key == ord('g') or key == ord('G'):
-            return 'GHOST'
         elif key == ord('s') or key == ord('S'):
             return 'START'
         elif key == ord('r') or key == ord('R'):
             return 'RESTART'
-        
+
         return None
     
     def run(self):
@@ -2357,7 +2545,7 @@ class NetworkTerminalClient:
                 self.client.send_start()
             elif action == 'RESTART':
                 self.client.send_restart()
-            elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE', 'GHOST']:
+            elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE']:
                 game = self.client.game
                 if game and self.client.player_id in game.snakes:
                     if game.snakes[self.client.player_id].get('alive', False):
@@ -2479,13 +2667,25 @@ class TerminalGame:
             x, y = ghost[0], ghost[1]
             if 0 < y < self.height - 1 and 0 < x < self.width - 1:
                 new_buffer[(x, y)] = (GHOST_SYMBOL, curses.color_pair(12) | curses.A_BOLD)
+
+        # Draw shotgun pickups
+        for pickup in game.shotgun_pickups:
+            x, y = pickup[0], pickup[1]
+            if 0 < y < self.height - 1 and 0 < x < self.width - 1:
+                new_buffer[(x, y)] = (SHOTGUN_SYMBOL, curses.color_pair(12) | curses.A_BOLD)
         
+        # Draw nuclear pickups
+        for pickup in game.nuclear_pickups:
+            x, y = pickup[0], pickup[1]
+            if 0 < y < self.height - 1 and 0 < x < self.width - 1:
+                new_buffer[(x, y)] = (NUCLEAR_SYMBOL, curses.color_pair(12) | curses.A_BOLD)
+
         # Draw bombs
         for bomb in game.bombs:
             x, y = bomb['x'], bomb['y']
             if 0 < y < self.height - 1 and 0 < x < self.width - 1:
                 new_buffer[(x, y)] = (BOMB_SYMBOL, curses.color_pair(13) | curses.A_BOLD)
-        
+
         # Draw snakes
         for player_id, snake in game.snakes.items():
             color = curses.color_pair(snake['color'] + 1)
@@ -2549,13 +2749,13 @@ class TerminalGame:
                 status = f" >>> STARTING IN {game.countdown} <<< "
             elif game.state == GameState.RUNNING.value:
                 my_snake = game.snakes.get(self.logic.player_id, {})
-                weapon_status = ""
-                if my_snake.get('has_weapon'):
-                    weapon_status += " [BOMB:SPACE]"
-                if my_snake.get('has_ghost'):
-                    weapon_status += " [GHOST:G]"
+                weapon_queue = my_snake.get('weapon_queue', [])
+                if weapon_queue:
+                    weapon_status = " [SPACE: " + ">".join(w[:3].upper() for w in weapon_queue) + "]"
+                else:
+                    weapon_status = ""
                 if my_snake.get('is_invisible'):
-                    weapon_status += " [INVISIBLE!]"
+                    weapon_status += " [GHOST ACTIVE!]"
                 alive_status = "ALIVE" if my_snake.get('alive', False) else "DEAD (spectating)"
                 score = my_snake.get('score', 0)
                 status = f" Score: {score} | {alive_status}{weapon_status} | Speed: {game.speed.upper()}"
@@ -2582,11 +2782,8 @@ class TerminalGame:
             for pid, snake in game.snakes.items():
                 name = snake['player_name'][:6]
                 status_char = "+" if snake['alive'] else "-"
-                weapon_char = ""
-                if snake.get('has_weapon'):
-                    weapon_char += "[B]"
-                if snake.get('has_ghost'):
-                    weapon_char += "[G]"
+                wq = snake.get('weapon_queue', [])
+                weapon_char = "[" + ",".join(w[:1].upper() for w in wq) + "]" if wq else ""
                 if snake.get('is_invisible'):
                     weapon_char += "[!]"
                 players_str += f"{status_char}{name}({snake['score']}){weapon_char} "
@@ -2594,7 +2791,7 @@ class TerminalGame:
                 self.stdscr.addstr(status_y + 1, 0, players_str[:self.width-1])
             except:
                 pass
-        
+
         self.stdscr.refresh()
     
     def handle_input(self) -> Optional[str]:
@@ -2603,11 +2800,11 @@ class TerminalGame:
             key = self.stdscr.getch()
         except:
             return None
-        
+
         if key == ord('q') or key == ord('Q'):
             self.running = False
             return 'QUIT'
-        
+
         if key == curses.KEY_UP:
             return 'UP'
         elif key == curses.KEY_DOWN:
@@ -2618,8 +2815,6 @@ class TerminalGame:
             return 'RIGHT'
         elif key == ord(' '):
             return 'FIRE'
-        elif key == ord('g') or key == ord('G'):
-            return 'GHOST'
         elif key == ord('s') or key == ord('S'):
             return 'START'
         
@@ -2641,7 +2836,7 @@ class TerminalGame:
                 break
             elif action == 'START' and game.state == GameState.WAITING.value:
                 self.logic.start_game(game)
-            elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE', 'GHOST']:
+            elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE']:
                 send_input(self.logic.player_id, action)
             
             tick_rate = SPEED_SETTINGS.get(game.speed, 0.15)
@@ -2705,7 +2900,7 @@ class TerminalGame:
             action = self.handle_input()
             if action == 'QUIT':
                 break
-            elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE', 'GHOST']:
+            elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE']:
                 # Only send input if we're alive
                 if game and self.logic.player_id in game.snakes:
                     if game.snakes[self.logic.player_id].get('alive', False):
@@ -2825,6 +3020,32 @@ class GUIGame:
         pygame.draw.ellipse(self.ghost_sprite, (0, 0, 0), (cs//4, cs//4, cs//5, cs//4))
         pygame.draw.ellipse(self.ghost_sprite, (0, 0, 0), (cs//2 + cs//8, cs//4, cs//5, cs//4))
         
+        # Shotgun pickup sprite (orange gun barrel)
+        self.shotgun_sprite = pygame.Surface((cs, cs), pygame.SRCALPHA)
+        pygame.draw.rect(self.shotgun_sprite, (200, 100, 0), (cs//4, cs//3, cs//2, cs//4))  # barrel
+        pygame.draw.rect(self.shotgun_sprite, (150, 75, 0), (cs//6, cs//2, cs*2//3, cs//4))  # stock
+        pygame.draw.circle(self.shotgun_sprite, (255, 150, 0), (3*cs//4, cs//2), cs//8)  # muzzle
+        
+        # Shotgun bullet sprite
+        self.shotgun_bullet_sprite = pygame.Surface((cs, cs), pygame.SRCALPHA)
+        pygame.draw.circle(self.shotgun_bullet_sprite, (255, 150, 0), (cs//2, cs//2), cs//4)
+        
+        # Nuclear pickup sprite (green glow, 2x2 cells)
+        self.nuclear_sprite = pygame.Surface((cs*2, cs*2), pygame.SRCALPHA)
+        pygame.draw.circle(self.nuclear_sprite, (0, 200, 0), (cs, cs), cs - 2)
+        pygame.draw.circle(self.nuclear_sprite, (100, 255, 100), (cs, cs), cs//2)
+        pygame.draw.circle(self.nuclear_sprite, (200, 255, 200), (cs, cs), cs//4)
+        for angle in [0, 2.094, 4.189]:
+            ex = cs + int(math.cos(angle) * (cs - 4))
+            ey = cs + int(math.sin(angle) * (cs - 4))
+            pygame.draw.line(self.nuclear_sprite, (0, 100, 0), (cs, cs), (ex, ey), 3)
+        
+        # Nuclear bomb (flying) sprite
+        self.nuclear_bomb_sprite = pygame.Surface((cs*2, cs*2), pygame.SRCALPHA)
+        pygame.draw.circle(self.nuclear_bomb_sprite, (0, 180, 0), (cs, cs), cs - 1)
+        pygame.draw.circle(self.nuclear_bomb_sprite, (100, 255, 100), (cs, cs), cs//2)
+        pygame.draw.circle(self.nuclear_bomb_sprite, (200, 255, 200), (cs, cs), cs//4)
+        
         # Invisible snake sprites (semi-transparent, only visible to owner)
         self.invisible_head_sprites = {}
         self.invisible_body_sprites = {}
@@ -2926,7 +3147,15 @@ class GUIGame:
         # Draw ghost pickups
         for ghost in game.ghost_pickups:
             self.screen.blit(self.ghost_sprite, (ghost[0] * cs, ghost[1] * cs))
+
+        # Draw shotgun pickups
+        for pickup in game.shotgun_pickups:
+            self.screen.blit(self.shotgun_sprite, (pickup[0] * cs, pickup[1] * cs))
         
+        # Draw nuclear pickups (2x2)
+        for pickup in game.nuclear_pickups:
+            self.screen.blit(self.nuclear_sprite, (pickup[0] * cs, pickup[1] * cs))
+
         # Draw snakes
         for player_id, snake in game.snakes.items():
             color_idx = snake['color'] % len(GUI_COLORS)
@@ -2966,9 +3195,14 @@ class GUIGame:
         
         # Draw bombs
         for bomb in game.bombs:
-            self.screen.blit(self.bomb_sprite, (bomb['x'] * cs, bomb['y'] * cs))
-        
-        # Draw explosion effects and create particles
+            bx, by = bomb['x'] * cs, bomb['y'] * cs
+            wtype = bomb.get('weapon_type', 'bomb')
+            if wtype == 'nuclear':
+                self.screen.blit(self.nuclear_bomb_sprite, (bx, by))
+            elif wtype == 'shotgun':
+                self.screen.blit(self.shotgun_bullet_sprite, (bx, by))
+            else:
+                self.screen.blit(self.bomb_sprite, (bx, by))
         for exp in game.explosions:
             if exp['ttl'] == 4:  # New explosion
                 self._create_explosion_particles(exp['x'], exp['y'])
@@ -3014,13 +3248,13 @@ class GUIGame:
             self.screen.blit(text_surf, (10, status_y))
         elif game.state == GameState.RUNNING.value:
             my_snake = game.snakes.get(self.logic.player_id, {})
-            weapon_text = ""
-            if my_snake.get('has_weapon'):
-                weapon_text += " [SPACE: BOMB]"
-            if my_snake.get('has_ghost'):
-                weapon_text += " [G: GHOST]"
+            weapon_queue = my_snake.get('weapon_queue', [])
+            if weapon_queue:
+                weapon_text = " [SPACE: " + " > ".join(w.upper() for w in weapon_queue) + "]"
+            else:
+                weapon_text = ""
             if my_snake.get('is_invisible'):
-                weapon_text += " [INVISIBLE!]"
+                weapon_text += " [GHOST ACTIVE!]"
             status = "ALIVE" if my_snake.get('alive', False) else "DEAD (spectating)"
             text = f"Score: {my_snake.get('score', 0)} | {status}{weapon_text}"
             text_surf = self.font.render(text, True, (255, 255, 255))
@@ -3075,18 +3309,15 @@ class GUIGame:
         for pid, snake in game.snakes.items():
             color = GUI_COLORS[snake['color'] % len(GUI_COLORS)]
             status = "●" if snake['alive'] else "○"
-            weapons = ""
-            if snake.get('has_weapon'):
-                weapons += "[B]"
-            if snake.get('has_ghost'):
-                weapons += "[G]"
+            wq = snake.get('weapon_queue', [])
+            weapons = "[" + ",".join(w[:1].upper() for w in wq) + "]" if wq else ""
             if snake.get('is_invisible'):
                 weapons += "[👻]"
             text = f"{status} {snake['player_name']}: {snake['score']}{weapons}"
             text_surf = self.small_font.render(text, True, color)
             self.screen.blit(text_surf, (player_x, status_y + 30))
             player_x += text_surf.get_width() + 20
-        
+
         pygame.display.flip()
     
     def handle_input(self) -> Optional[str]:
@@ -3109,8 +3340,6 @@ class GUIGame:
                     return 'RIGHT'
                 elif event.key == pygame.K_SPACE:
                     return 'FIRE'
-                elif event.key == pygame.K_g:
-                    return 'GHOST'
                 elif event.key == pygame.K_s:
                     return 'START'
         return None
@@ -3137,7 +3366,7 @@ class GUIGame:
                 break
             elif action == 'START' and game.state == GameState.WAITING.value:
                 self.logic.start_game(game)
-            elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE', 'GHOST']:
+            elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE']:
                 pending_action = action
             
             # In WAITING state, periodically check for new players joining
@@ -3170,10 +3399,8 @@ class GUIGame:
                             snake['direction'] = Direction.LEFT.value
                         elif pending_action == 'RIGHT' and current_dir != Direction.LEFT:
                             snake['direction'] = Direction.RIGHT.value
-                        elif pending_action == 'FIRE' and snake.get('has_weapon'):
-                            self.logic._fire_weapon(game, snake)
-                        elif pending_action == 'GHOST' and snake.get('has_ghost'):
-                            self.logic._activate_ghost(game, snake, current_time)
+                        elif pending_action == 'FIRE' and snake.get('weapon_queue'):
+                            self.logic._fire_weapon(game, snake, current_time)
                     pending_action = None
                 
                 # Read and process inputs from other players (file-based)
@@ -3191,10 +3418,8 @@ class GUIGame:
                                 snake['direction'] = Direction.LEFT.value
                             elif input_action == 'RIGHT' and current_dir != Direction.LEFT:
                                 snake['direction'] = Direction.RIGHT.value
-                            elif input_action == 'FIRE' and snake.get('has_weapon'):
-                                self.logic._fire_weapon(game, snake)
-                            elif input_action == 'GHOST' and snake.get('has_ghost'):
-                                self.logic._activate_ghost(game, snake, current_time)
+                            elif input_action == 'FIRE' and snake.get('weapon_queue'):
+                                self.logic._fire_weapon(game, snake, current_time)
                 
                 # Update invisibility status
                 for player_id, snake in game.snakes.items():
@@ -3213,6 +3438,9 @@ class GUIGame:
                     
                     # Update explosions
                     self.logic._update_explosions(game)
+
+                    # Update shotgun bursts
+                    self.logic._update_shotgun_bursts(game, current_time)
                     
                     # Check collisions
                     self.logic._check_collisions(game)
@@ -3220,13 +3448,23 @@ class GUIGame:
                     # Update rankings after collisions
                     self.logic._update_rankings(game)
 
-                    # Spawn weapons (alternating between bomb and ghost)
+                    # Spawn weapons
                     if current_time >= game.next_weapon_spawn:
-                        if random.random() < 0.5:
+                        _weapon_choice = random.choices(
+                            ['bomb', 'ghost', 'shotgun', 'nuclear'],
+                            weights=[1.0, 1.0, 1.0, 0.3]
+                        )[0]
+                        if _weapon_choice == 'bomb':
                             self.logic._spawn_weapon(game)
-                        else:
+                        elif _weapon_choice == 'ghost':
                             self.logic._spawn_ghost(game)
-                        game.next_weapon_spawn = current_time + random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX)
+                        elif _weapon_choice == 'shotgun':
+                            self.logic._spawn_shotgun(game)
+                        elif _weapon_choice == 'nuclear':
+                            self.logic._spawn_nuclear(game)
+                        alive_count = max(1, sum(1 for s in game.snakes.values() if s['alive']))
+                        _interval = random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX) / alive_count
+                        game.next_weapon_spawn = current_time + max(1.0, _interval)
 
                     # Check winner
                     alive_count = sum(1 for s in game.snakes.values() if s['alive'])
@@ -3315,7 +3553,7 @@ class GUIGame:
             action = self.handle_input()
             if action == 'QUIT':
                 break
-            elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE', 'GHOST']:
+            elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE']:
                 # Only send input if we're alive
                 if game and self.logic.player_id in game.snakes:
                     if game.snakes[self.logic.player_id].get('alive', False):
@@ -3422,7 +3660,33 @@ class NetworkGUIClient:
         pygame.draw.rect(self.ghost_sprite, (200, 200, 255), (2, cs//3, cs-4, cs//3))
         pygame.draw.ellipse(self.ghost_sprite, (0, 0, 0), (cs//4, cs//4, cs//5, cs//4))
         pygame.draw.ellipse(self.ghost_sprite, (0, 0, 0), (cs//2 + cs//8, cs//4, cs//5, cs//4))
+
+        # Shotgun pickup sprite (orange gun barrel)
+        self.shotgun_sprite = pygame.Surface((cs, cs), pygame.SRCALPHA)
+        pygame.draw.rect(self.shotgun_sprite, (200, 100, 0), (cs//4, cs//3, cs//2, cs//4))
+        pygame.draw.rect(self.shotgun_sprite, (150, 75, 0), (cs//6, cs//2, cs*2//3, cs//4))
+        pygame.draw.circle(self.shotgun_sprite, (255, 150, 0), (3*cs//4, cs//2), cs//8)
         
+        # Shotgun bullet sprite
+        self.shotgun_bullet_sprite = pygame.Surface((cs, cs), pygame.SRCALPHA)
+        pygame.draw.circle(self.shotgun_bullet_sprite, (255, 150, 0), (cs//2, cs//2), cs//4)
+        
+        # Nuclear pickup sprite (green glow, 2x2 cells)
+        self.nuclear_sprite = pygame.Surface((cs*2, cs*2), pygame.SRCALPHA)
+        pygame.draw.circle(self.nuclear_sprite, (0, 200, 0), (cs, cs), cs - 2)
+        pygame.draw.circle(self.nuclear_sprite, (100, 255, 100), (cs, cs), cs//2)
+        pygame.draw.circle(self.nuclear_sprite, (200, 255, 200), (cs, cs), cs//4)
+        for angle in [0, 2.094, 4.189]:
+            ex = cs + int(math.cos(angle) * (cs - 4))
+            ey = cs + int(math.sin(angle) * (cs - 4))
+            pygame.draw.line(self.nuclear_sprite, (0, 100, 0), (cs, cs), (ex, ey), 3)
+        
+        # Nuclear bomb (flying) sprite
+        self.nuclear_bomb_sprite = pygame.Surface((cs*2, cs*2), pygame.SRCALPHA)
+        pygame.draw.circle(self.nuclear_bomb_sprite, (0, 180, 0), (cs, cs), cs - 1)
+        pygame.draw.circle(self.nuclear_bomb_sprite, (100, 255, 100), (cs, cs), cs//2)
+        pygame.draw.circle(self.nuclear_bomb_sprite, (200, 255, 200), (cs, cs), cs//4)
+
         self.invisible_head_sprites = {}
         self.invisible_body_sprites = {}
         for i, color in enumerate(GUI_COLORS):
@@ -3444,12 +3708,26 @@ class NetworkGUIClient:
         self.screen.fill((20, 20, 40))
         
         if game.walls_enabled:
-            for x in range(game.width + 1):
-                self.screen.blit(self.wall_sprite, (x * cs, 0))
-                self.screen.blit(self.wall_sprite, (x * cs, game.height * cs))
-            for y in range(game.height + 1):
-                self.screen.blit(self.wall_sprite, (0, y * cs))
-                self.screen.blit(self.wall_sprite, (game.width * cs, y * cs))
+            if game.shrinking_walls_active:
+                bounds = game.shrinking_wall_bounds
+                destroyed = game.destroyed_wall_segments
+                for x in range(bounds['left'], bounds['right'] + 1):
+                    if [x, bounds['top']] not in destroyed:
+                        self.screen.blit(self.wall_sprite, (x * cs, bounds['top'] * cs))
+                    if [x, bounds['bottom']] not in destroyed:
+                        self.screen.blit(self.wall_sprite, (x * cs, bounds['bottom'] * cs))
+                for y in range(bounds['top'], bounds['bottom'] + 1):
+                    if [bounds['left'], y] not in destroyed:
+                        self.screen.blit(self.wall_sprite, (bounds['left'] * cs, y * cs))
+                    if [bounds['right'], y] not in destroyed:
+                        self.screen.blit(self.wall_sprite, (bounds['right'] * cs, y * cs))
+            else:
+                for x in range(game.width + 1):
+                    self.screen.blit(self.wall_sprite, (x * cs, 0))
+                    self.screen.blit(self.wall_sprite, (x * cs, game.height * cs))
+                for y in range(game.height + 1):
+                    self.screen.blit(self.wall_sprite, (0, y * cs))
+                    self.screen.blit(self.wall_sprite, (game.width * cs, y * cs))
         
         for food in game.foods:
             self.screen.blit(self.food_sprite, (food[0] * cs, food[1] * cs))
@@ -3459,7 +3737,15 @@ class NetworkGUIClient:
         
         for ghost in game.ghost_pickups:
             self.screen.blit(self.ghost_sprite, (ghost[0] * cs, ghost[1] * cs))
+
+        # Draw shotgun pickups
+        for pickup in game.shotgun_pickups:
+            self.screen.blit(self.shotgun_sprite, (pickup[0] * cs, pickup[1] * cs))
         
+        # Draw nuclear pickups (2x2)
+        for pickup in game.nuclear_pickups:
+            self.screen.blit(self.nuclear_sprite, (pickup[0] * cs, pickup[1] * cs))
+
         for player_id, snake in game.snakes.items():
             color_idx = snake['color'] % len(GUI_COLORS)
             is_me = player_id == self.client.player_id
@@ -3492,7 +3778,14 @@ class NetworkGUIClient:
                         self.screen.blit(self.body_sprites[color_idx], (x, y))
         
         for bomb in game.bombs:
-            self.screen.blit(self.bomb_sprite, (bomb['x'] * cs, bomb['y'] * cs))
+            bx, by = bomb['x'] * cs, bomb['y'] * cs
+            wtype = bomb.get('weapon_type', 'bomb')
+            if wtype == 'nuclear':
+                self.screen.blit(self.nuclear_bomb_sprite, (bx, by))
+            elif wtype == 'shotgun':
+                self.screen.blit(self.shotgun_bullet_sprite, (bx, by))
+            else:
+                self.screen.blit(self.bomb_sprite, (bx, by))
         
         # Draw player names above snake heads (only during WAITING state)
         if game.state == GameState.WAITING.value:
@@ -3535,13 +3828,13 @@ class NetworkGUIClient:
             self.screen.blit(text_surf, (10, status_y))
         elif game.state == GameState.RUNNING.value:
             my_snake = game.snakes.get(self.client.player_id, {})
-            weapon_text = ""
-            if my_snake.get('has_weapon'):
-                weapon_text += " [SPACE: BOMB]"
-            if my_snake.get('has_ghost'):
-                weapon_text += " [G: GHOST]"
+            weapon_queue = my_snake.get('weapon_queue', [])
+            if weapon_queue:
+                weapon_text = " [SPACE: " + " > ".join(w.upper() for w in weapon_queue) + "]"
+            else:
+                weapon_text = ""
             if my_snake.get('is_invisible'):
-                weapon_text += " [INVISIBLE!]"
+                weapon_text += " [GHOST ACTIVE!]"
             status = "ALIVE" if my_snake.get('alive', False) else "DEAD (spectating)"
             text = f"Score: {my_snake.get('score', 0)} | {status}{weapon_text}"
             text_surf = self.font.render(text, True, (255, 255, 255))
@@ -3596,7 +3889,11 @@ class NetworkGUIClient:
         for pid, snake in game.snakes.items():
             color = GUI_COLORS[snake['color'] % len(GUI_COLORS)]
             status = "●" if snake['alive'] else "○"
-            text = f"{status} {snake['player_name']}: {snake['score']}"
+            wq = snake.get('weapon_queue', [])
+            weapons = "[" + ",".join(w[:1].upper() for w in wq) + "]" if wq else ""
+            if snake.get('is_invisible'):
+                weapons += "[👻]"
+            text = f"{status} {snake['player_name']}: {snake['score']}{weapons}"
             text_surf = self.small_font.render(text, True, color)
             self.screen.blit(text_surf, (player_x, status_y + 30))
             player_x += text_surf.get_width() + 20
@@ -3625,8 +3922,6 @@ class NetworkGUIClient:
                     return 'RIGHT'
                 elif event.key == pygame.K_SPACE:
                     return 'FIRE'
-                elif event.key == pygame.K_g:
-                    return 'GHOST'
                 elif event.key == pygame.K_s:
                     return 'START'
                 elif event.key == pygame.K_r:
@@ -3691,7 +3986,7 @@ class NetworkGUIClient:
                     self.client.send_start()
                 elif action == 'RESTART':
                     self.client.send_restart()
-                elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE', 'GHOST']:
+                elif action in ['UP', 'DOWN', 'LEFT', 'RIGHT', 'FIRE']:
                     game = self.client.game
                     if game and self.client.player_id in game.snakes:
                         if game.snakes[self.client.player_id].get('alive', False):

@@ -11,9 +11,11 @@ A multiplayer Snake game for Linux/Windows supporting up to 10 players over the 
 - **Two Game Modes**:
   - **Classic**: Traditional snake - the snake only grows when eating food
   - **Kurve** (Achtung die Kurve style): The snake constantly grows and leaves a permanent trail
-- **Weapon System**:
-  - **Bomb (W)**: Collect bombs and shoot at other snakes (destroys 4 segments!)
-  - **Ghost (G)**: Become invisible for 5 seconds - other players can't see you!
+- **Weapon System** (4 weapons, all fired with `Space` in collection order):
+  - **Bomb**: Shoot at other snakes — destroys 4 segments!
+  - **Ghost**: Become invisible for 5 seconds — you pass through others, but they still die hitting you!
+  - **Shotgun**: Fires a 10-shot burst over 2 seconds — each bullet destroys 1 segment
+  - **Nuclear Bomb**: Infinite range, wraps the map until it hits something — destroys a 10×10 area on impact!
 - **Shrinking Walls**: Battle royale mode activates when 3 or fewer players remain
   - Walls shrink every 15 seconds (3 players) or 10 seconds (2 players)
   - Bombs can destroy wall segments to create escape routes
@@ -106,9 +108,8 @@ python snake_game.py --windowed --connect 192.168.1.100:5555 --gui
 
 | Key | Action |
 |-----|--------|
-| Space / Enter | Fire bomb (destroys 4 segments!) |
-| G | Activate Ghost mode (invisible for 5 sec) |
-| S | Start game (host only) |
+| Space | Fire next weapon in queue (in collection order) |
+| S | Start game (when in lobby) |
 
 ### Game Control
 
@@ -148,8 +149,11 @@ python snake_game.py --windowed --connect 192.168.1.100:5555 --gui
 | ▓ | Snake Body | Your snake's body segments |
 | ░ | Dead Snake | Dead snake (becomes obstacle) |
 | ● | Food | Eat to grow and score points |
-| ◆ / W | Weapon | Collectible bomb |
-| * | Bomb | Flying projectile |
+| W | Bomb pickup | Collectible bomb weapon |
+| S | Shotgun pickup | Collectible shotgun weapon |
+| N | Nuclear pickup | Collectible nuclear bomb weapon |
+| G | Ghost pickup | Collectible ghost weapon |
+| ! | Flying bomb | Normal bomb projectile |
 | # | Wall | Impassable obstacle |
 
 ## Game Modes Explained
@@ -166,13 +170,38 @@ python snake_game.py --windowed --connect 192.168.1.100:5555 --gui
 
 ## Weapon System
 
-- **Weapons spawn** randomly every 5-15 seconds (Symbol: W / 💣)
-- **Collect** by running over them with your snake
-- **Fire** with Space bar
-- **Effect**: Bomb flies in your direction and **destroys 4 segments** on hit
-- **Warning**: Can hit your own snake! Aim carefully!
-- **Explosion animation** on hit (especially nice in GUI mode)
-- One weapon per player at a time
+All weapons are collected by running over them. They are stored in a **queue** and fired in the order they were collected — all with the `Space` bar.
+
+### Bomb 💣
+- Spawns on the field every few seconds (more players = more frequent spawns)
+- Flies in the direction your snake is facing
+- **Destroys 4 segments** on hit — can hit your own snake, aim carefully!
+- Explodes with a visual animation on hit
+
+### Ghost 👻
+- Activates immediately when fired
+- Makes your snake **invisible** for 5 seconds
+- **You pass through other snakes** without dying (ghost mode)
+- **Other snakes still die** if they run into your invisible body
+- Other players cannot see you (only you see your own ghost snake)
+
+### Shotgun 🔫
+- Fires a **burst of 10 bullets** over 2 seconds
+- Each bullet travels in your current facing direction
+- Each bullet **destroys 1 segment** on hit
+- Good for sustained pressure on a target
+
+### Nuclear Bomb ☢️
+- Flies in your facing direction with **infinite range** — it wraps around the map and will always hit something eventually
+- On impact: **destroys all snake segments in a 10×10 area**
+- **Spawns 30% as often** as other weapons — rare but devastating
+- Renders as a glowing green 2×2 projectile
+
+### Weapon Spawn Rate
+Weapons spawn more frequently as more players are in the game:
+- Spawn interval scales as `base_interval / alive_player_count`
+- Minimum interval: 1 second regardless of player count
+- When players die, spawn rate decreases accordingly in real-time
 
 ## Endgame Features
 
@@ -192,7 +221,7 @@ When the game ends, an epic winner screen displays:
   - 🥈 **2nd Place** - Silver medal and medium text
   - 🥉 **3rd Place** - Bronze medal and smaller text
 - **Scores**: Points shown for each ranked player
-- **Restart**: Press 'R' to play again with same players
+- **Restart**: Press `R` to return to lobby with same players — names are shown again and any player can press `S` to start
 
 ## GUI Mode
 
@@ -217,9 +246,9 @@ echo $DISPLAY  # Should show :0 or similar
 Your snake dies when:
 - Touching a wall (only if walls are enabled!)
 - Touching itself
-- Touching another snake (alive or dead)
+- Touching another snake's body (alive or dead, **including invisible ghost snakes**)
 - Touching shrinking walls (during endgame battle royale)
-- Being reduced to less than 2 segments by a bomb
+- Being reduced to less than 2 segments by a bomb, shotgun, or nuclear blast
 
 **Dead snakes remain as solid obstacles** - eliminated players continue to affect the game by creating maze-like obstacles on the playing field!
 
@@ -240,7 +269,7 @@ Your snake dies when:
 5. **Early game**: All players control their snakes simultaneously
 6. **Endgame**: When 3 or fewer players remain, shrinking walls activate
 7. **Victory**: Winner announced with rankings and medals for top 3 players
-8. **Restart**: Press `R` to play again with same players
+8. **Restart**: Press `R` to return to lobby — all players see each other, then press `S` to start again
 
 ## Technical Details
 
