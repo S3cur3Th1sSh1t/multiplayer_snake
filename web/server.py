@@ -132,8 +132,9 @@ class WebSnakeServer:
         for pid, snake in d.get("snakes", {}).items():
             if snake.get("is_invisible", False) and pid != viewer_id:
                 snake["body"] = []
-        # Inject extra web-only field not present in GameData dataclass
+        # Inject extra web-only fields not present in GameData dataclass
         d["shrinking_walls_enabled"] = getattr(self.game, "shrinking_walls_enabled", True)
+        d["auto_restart_in"]         = getattr(self.game, "auto_restart_in", None)
         return d
 
     async def broadcast_state(self):
@@ -309,7 +310,7 @@ class WebSnakeServer:
     # ------------------------------------------------------------------ game loop
 
     async def game_loop(self):
-        last_tick      = time.time()
+        last_tick          = time.time()
         last_waiting_bcast = time.time()
 
         while True:
@@ -326,6 +327,20 @@ class WebSnakeServer:
                     self.game.state    = GameState.RUNNING.value
                     self.game.countdown = 0
                     log.info("Game running!")
+
+            # Auto-restart after FINISHED state lingers 10 s
+            if self.game.state == GameState.FINISHED.value:
+                finished_at = getattr(self.game, "_finished_at", None)
+                if finished_at is None:
+                    self.game._finished_at = now
+                    finished_at = now
+                remaining = max(0, 10 - int(now - finished_at))
+                if remaining != getattr(self.game, "auto_restart_in", None):
+                    self.game.auto_restart_in = remaining
+                    await self.broadcast_state()
+                if now - finished_at >= 10.0:
+                    log.info("Auto-restarting after 10 s timeout")
+                    await self.handle_restart(None)   # None = server-triggered
 
             # Tick
             if now - last_tick >= tick_rate:

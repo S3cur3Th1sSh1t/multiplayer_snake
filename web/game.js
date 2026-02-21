@@ -729,11 +729,17 @@ function drawWinnerScreen(g, cs) {
     );
   });
 
-  // Restart hint
+  // Restart hint + auto-restart countdown
   const fs3 = Math.min(18, cs * 1.4);
   ctx.font      = `${fs3}px Courier New`;
-  ctx.fillStyle = "#888";
-  ctx.fillText("Press R to play again", cx, cy + 5 * (fs2 + 8) + fs3);
+  const autoIn  = g.auto_restart_in;
+  if (autoIn != null && autoIn > 0) {
+    ctx.fillStyle = "#ffea00";
+    ctx.fillText(`Auto-restart in ${autoIn}s… (press R to restart now)`, cx, cy + 5 * (fs2 + 8) + fs3);
+  } else {
+    ctx.fillStyle = "#888";
+    ctx.fillText("Press R to play again", cx, cy + 5 * (fs2 + 8) + fs3);
+  }
 }
 
 // -- Waiting: draw player starts
