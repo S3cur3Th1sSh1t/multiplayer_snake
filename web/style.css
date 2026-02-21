@@ -150,7 +150,9 @@ html, body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;   /* dynamic viewport height — excludes mobile browser chrome */
   align-items: center;
+  overflow: hidden;
 }
 
 /* ─── HUD ───────────────────────────────────────────────────── */
@@ -186,6 +188,7 @@ html, body {
 /* ─── Canvas container ──────────────────────────────────────── */
 #canvasWrap {
   flex: 1;
+  min-height: 0;     /* allow shrinking inside flex — critical for mobile */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -220,10 +223,19 @@ html, body {
   width: 100%;
   align-items: center;
   justify-content: space-around;
-  padding: 8px 20px;
+  padding: 6px 16px;
   background: rgba(0,0,0,.4);
   border-top: 1px solid var(--border);
-  gap: 20px;
+  gap: 16px;
+  box-sizing: border-box;
+}
+
+/* Shrink controls on small/short screens so buttons stay visible */
+@media (pointer: coarse) and (max-height: 580px) {
+  :root { --ctrl-h: 100px; }
+  .dpad-btn  { width: 32px; height: 32px; font-size: .85rem; }
+  .dpad-center { width: 32px; height: 32px; }
+  .btn-fire  { width: 60px; height: 60px; font-size: .75rem; }
 }
 
 /* d-pad */

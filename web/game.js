@@ -67,12 +67,17 @@ let gameW     = 80;
 let gameH     = 45;
 
 function computeCellSize(gw, gh) {
-  const hudH    = 42;
-  const ctrlH   = isTouchDevice() ? 130 : 0;
-  const spectH  = isSpectator && !spectatorBanner.classList.contains("hidden") ? 28 : 0;
-  const maxW = window.innerWidth  - 4;
-  const maxH = window.innerHeight - hudH - ctrlH - spectH - 8;
-  return Math.max(4, Math.min(Math.floor(maxW / gw), Math.floor(maxH / gh)));
+  const hudH  = 42;
+  // Use actual rendered height of controls (respects the media-query shrink)
+  const ctrlEl = document.getElementById("mobileControls");
+  const ctrlH  = (isTouchDevice() && ctrlEl)
+    ? ctrlEl.getBoundingClientRect().height || 130
+    : 0;
+  const spectH = isSpectator && !spectatorBanner.classList.contains("hidden") ? 28 : 0;
+  // Use visualViewport when available (accurate on mobile with browser chrome)
+  const vw = (window.visualViewport ? window.visualViewport.width  : window.innerWidth)  - 4;
+  const vh = (window.visualViewport ? window.visualViewport.height : window.innerHeight) - hudH - ctrlH - spectH - 8;
+  return Math.max(4, Math.min(Math.floor(vw / gw), Math.floor(vh / gh)));
 }
 
 function resizeCanvas() {
@@ -409,10 +414,22 @@ function render() {
   }
 }
 
-// -- Walls
+// -- Walls / boundary
 
 function drawWalls(g, cs) {
-  if (!g.walls_enabled) return;
+  const W = g.width, H = g.height;
+
+  if (!g.walls_enabled) {
+    // No-walls mode: draw a dim dashed border so players know the wrap zone
+    ctx.save();
+    ctx.strokeStyle = "rgba(100,100,150,0.35)";
+    ctx.lineWidth   = Math.max(1, cs * 0.25);
+    ctx.setLineDash([cs * 1.5, cs * 1.0]);
+    ctx.strokeRect(cs * 0.5, cs * 0.5, (W - 1) * cs, (H - 1) * cs);
+    ctx.setLineDash([]);
+    ctx.restore();
+    return;
+  }
 
   ctx.fillStyle   = "#424242";
   ctx.strokeStyle = "#2a2a2a";
@@ -431,7 +448,6 @@ function drawWalls(g, cs) {
     // right col
     for (let y = b.top + 1; y < b.bottom; y++) drawWallCell(b.right, y, cs, destroyed);
   } else {
-    const W = g.width, H = g.height;
     for (let x = 0; x < W; x++) {
       drawWallCell(x, 0,     cs, destroyed);
       drawWallCell(x, H - 1, cs, destroyed);
