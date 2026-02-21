@@ -254,6 +254,56 @@ Your snake dies when:
 
 **Without walls (`--no-walls`)**: Snakes appear on the other side of the screen.
 
+## 🌐 Browser Version
+
+A full-featured browser game is included in the `web/` folder — no Python clients needed!
+
+### Quick Start
+
+```bash
+# Install aiohttp
+pip install aiohttp
+
+# Start the web server (HTTP + WebSocket on the same port)
+cd web
+python server.py
+
+# Open in your browser
+# http://localhost:8080
+```
+
+### Options
+
+```bash
+python server.py --host 0.0.0.0 --port 8080 --mode classic --speed normal
+python server.py --no-walls   # wrap-around mode
+python server.py --speed fast  # faster game
+```
+
+### Browser Features
+
+- **Up to 10 players** in the same game, all in different browser tabs / devices
+- **Lobby** — enter your name, wait for others, anyone can press `S` to start
+- **Spectator mode** — players who join during a running game can watch live
+- **Full feature parity** — all 4 weapons, ghost mode, shrinking walls, nuclear bombs, etc.
+- **Mobile support** — virtual D-pad + fire button on touch screens; or swipe to move / tap to fire
+- **Winner screen** — medals, rankings, `R` to restart
+- **Particles & explosions** — client-side visual effects
+- **Anti-cheat** — server filters invisible snake bodies before sending to non-owners
+
+### Browser Controls
+
+| Input | Action |
+|-------|--------|
+| Arrow keys / WASD | Direction |
+| Space | Fire weapon |
+| S | Start game (lobby) |
+| R | Restart (after game over) |
+| Swipe on canvas | Direction (mobile) |
+| Tap on canvas | Fire (mobile) |
+| D-pad buttons | Direction (mobile) |
+| 🔥 FIRE button | Fire (mobile) |
+
 ## Network Architecture
 
 ### Protocol Design

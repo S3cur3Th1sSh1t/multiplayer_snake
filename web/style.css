@@ -1,0 +1,263 @@
+/* ─── Reset & base ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0d0d1a;
+  --surface:  #1a1a2e;
+  --border:   #2d2d5c;
+  --accent:   #4fc3f7;
+  --danger:   #ef5350;
+  --good:     #66bb6a;
+  --text:     #e0e0e0;
+  --muted:    #888;
+  --hud-h:    42px;
+  --ctrl-h:   130px;
+}
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Courier New', Courier, monospace;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ─── Overlays ──────────────────────────────────────────────── */
+.overlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.85);
+  z-index: 100;
+}
+.overlay.hidden { display: none; }
+
+.overlay-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 36px 40px;
+  text-align: center;
+  max-width: 420px; width: 90%;
+  box-shadow: 0 0 40px rgba(79,195,247,.15);
+}
+
+.logo { font-size: 3rem; }
+
+.overlay-card h1 {
+  font-size: 1.7rem;
+  margin: 8px 0 4px;
+  color: var(--accent);
+  letter-spacing: 1px;
+}
+
+.sub  { color: var(--muted); margin-bottom: 20px; font-size: .9rem; }
+.hint { color: var(--muted); font-size: .82rem; margin: 10px 0; }
+.hint kbd {
+  background: var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: inherit;
+}
+
+/* Spinner */
+.spinner {
+  width: 36px; height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  margin: 18px auto 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Name input */
+#nameInput {
+  display: block;
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 1.1rem;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  outline: none;
+  transition: border-color .2s;
+}
+#nameInput:focus { border-color: var(--accent); }
+
+/* Buttons */
+.btn-primary {
+  width: 100%;
+  padding: 11px;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: .5px;
+  transition: opacity .15s;
+}
+.btn-primary:hover { opacity: .85; }
+.btn-primary:active { opacity: .7; }
+
+/* Player list */
+#playerList {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 14px 0 6px;
+  min-height: 60px;
+  max-height: 200px;
+  overflow-y: auto;
+  text-align: left;
+}
+.player-entry {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px;
+  font-size: .9rem;
+}
+.player-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.empty-list { color: var(--muted); font-size: .85rem; text-align: center; padding: 8px 0; }
+
+/* ─── Game wrapper ──────────────────────────────────────────── */
+#gameWrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  align-items: center;
+}
+
+/* ─── HUD ───────────────────────────────────────────────────── */
+#hud {
+  width: 100%;
+  height: var(--hud-h);
+  background: rgba(0,0,0,.6);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  font-size: .82rem;
+  flex-shrink: 0;
+  gap: 8px;
+}
+#hudLeft  { color: var(--good);  min-width: 120px; }
+#hudCenter { flex: 1; text-align: center; color: var(--accent); overflow: hidden; white-space: nowrap; }
+#hudRight  { color: #ffd700; min-width: 100px; text-align: right; }
+
+/* Spectator banner */
+#spectatorBanner {
+  width: 100%;
+  background: rgba(100,100,0,.5);
+  border-bottom: 1px solid #888800;
+  text-align: center;
+  padding: 4px;
+  font-size: .85rem;
+  flex-shrink: 0;
+}
+#spectatorBanner.hidden { display: none; }
+
+/* ─── Canvas container ──────────────────────────────────────── */
+#canvasWrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+#gameCanvas {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+#rotateHint {
+  position: absolute;
+  bottom: 10px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,.75);
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: .78rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+#rotateHint.hidden { display: none; }
+
+/* ─── Mobile controls ───────────────────────────────────────── */
+#mobileControls {
+  display: none;   /* shown via media query below */
+  flex-shrink: 0;
+  height: var(--ctrl-h);
+  width: 100%;
+  align-items: center;
+  justify-content: space-around;
+  padding: 8px 20px;
+  background: rgba(0,0,0,.4);
+  border-top: 1px solid var(--border);
+  gap: 20px;
+}
+
+/* d-pad */
+#dpad { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.dpad-row { display: flex; gap: 2px; }
+.dpad-mid  { align-items: center; }
+.dpad-center { width: 38px; height: 38px; }
+
+.dpad-btn {
+  width: 38px; height: 38px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .1s;
+}
+.dpad-btn:active { background: var(--border); }
+
+/* fire button */
+.btn-fire {
+  width: 72px; height: 72px;
+  background: #b71c1c;
+  border: 2px solid #ef5350;
+  border-radius: 50%;
+  color: white;
+  font-size: .85rem;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .1s, transform .1s;
+  line-height: 1.1;
+}
+.btn-fire:active { background: #ef5350; transform: scale(.93); }
+
+/* Show controls on touch devices */
+@media (pointer: coarse) {
+  #mobileControls { display: flex; }
+}
+
+/* Portrait hint */
+@media (orientation: portrait) and (max-width: 600px) {
+  #rotateHint.hidden { display: none; }   /* still respect class */
+  /* For true portrait phones, show hint automatically via JS */
+}
+
+/* Hidden utility */
+.hidden { display: none !important; }

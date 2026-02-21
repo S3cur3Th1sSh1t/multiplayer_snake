@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>🐍 Snake Multiplayer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ═══════════════════════ OVERLAYS ═══════════════════════ -->
+
+<!-- Connecting -->
+<div id="connectingOverlay" class="overlay">
+  <div class="overlay-card">
+    <div class="logo">🐍</div>
+    <h1>Snake Multiplayer</h1>
+    <p class="sub">Connecting to server…</p>
+    <div class="spinner"></div>
+  </div>
+</div>
+
+<!-- Lobby / name entry -->
+<div id="lobbyOverlay" class="overlay hidden">
+  <div class="overlay-card">
+    <div class="logo">🐍</div>
+    <h1>Snake Multiplayer</h1>
+
+    <div id="nameSection">
+      <input id="nameInput" type="text" maxlength="16"
+             placeholder="Your name" autocomplete="off" spellcheck="false" />
+      <button id="joinBtn" class="btn-primary">Join Lobby</button>
+    </div>
+
+    <div id="lobbySection" class="hidden">
+      <div id="playerList"></div>
+      <p class="hint">Press <kbd>S</kbd> or tap <strong>Start</strong> when ready</p>
+      <button id="startBtn" class="btn-primary">▶ Start Game</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════ GAME AREA ═══════════════════════ -->
+
+<div id="gameWrapper">
+
+  <!-- HUD bar -->
+  <div id="hud">
+    <div id="hudLeft">
+      <span id="hudStatus"></span>
+    </div>
+    <div id="hudCenter">
+      <span id="hudWeapons"></span>
+    </div>
+    <div id="hudRight">
+      <span id="hudScore"></span>
+    </div>
+  </div>
+
+  <!-- Spectator banner -->
+  <div id="spectatorBanner" class="hidden">
+    👁 Spectating — game in progress
+  </div>
+
+  <!-- Canvas -->
+  <div id="canvasWrap">
+    <canvas id="gameCanvas"></canvas>
+    <!-- Rotate hint for portrait mobile -->
+    <div id="rotateHint" class="hidden">
+      📱 Rotate your device for a better experience
+    </div>
+  </div>
+
+  <!-- Mobile controls -->
+  <div id="mobileControls">
+    <div id="dpad">
+      <div class="dpad-row">
+        <button class="dpad-btn" id="btnUp"    data-action="UP">▲</button>
+      </div>
+      <div class="dpad-row dpad-mid">
+        <button class="dpad-btn" id="btnLeft"  data-action="LEFT">◀</button>
+        <div class="dpad-center"></div>
+        <button class="dpad-btn" id="btnRight" data-action="RIGHT">▶</button>
+      </div>
+      <div class="dpad-row">
+        <button class="dpad-btn" id="btnDown"  data-action="DOWN">▼</button>
+      </div>
+    </div>
+    <button id="fireBtn" class="btn-fire">🔥<br>FIRE</button>
+  </div>
+
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
