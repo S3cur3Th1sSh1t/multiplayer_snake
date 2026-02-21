@@ -52,6 +52,7 @@ const gameOverTitle     = document.getElementById("gameOverTitle");
 const gameOverRankings  = document.getElementById("gameOverRankings");
 const gameOverTimer     = document.getElementById("gameOverTimer");
 const restartBtn        = document.getElementById("restartBtn");
+const quitBtn           = document.getElementById("quitBtn");
 const hudStatus         = document.getElementById("hudStatus");
 const hudWeapons        = document.getElementById("hudWeapons");
 const hudScore          = document.getElementById("hudScore");
@@ -250,8 +251,10 @@ function updateGameOverOverlay() {
     gameOverTimer.textContent = "";
   }
 
-  // Spectators can't restart
-  restartBtn.style.display = isSpectator ? "none" : "";
+  // Spectators can't restart or quit
+  const canAct = !isSpectator;
+  restartBtn.style.display = canAct ? "" : "none";
+  quitBtn.style.display    = canAct ? "" : "none";
 }
 
 function escHtml(s) {
@@ -824,23 +827,27 @@ document.addEventListener("keydown", e => {
 
   if (!gameState) return;
 
+  // Never fire game shortcuts while the user is typing in an input field
+  const inInput = document.activeElement && document.activeElement.tagName === "INPUT";
+
   const state = gameState.state;
 
-  // Join / start during lobby
+  // Join on Enter (only when inside the name input or not yet welcomed)
   if ((state === "waiting" || !welcomed) && e.key === "Enter") {
     if (!welcomed) tryJoin();
     return;
   }
-  if (state === "waiting" && (e.key === "s" || e.key === "S")) {
+  // Start / restart shortcuts — blocked when typing in an input
+  if (!inInput && state === "waiting" && (e.key === "s" || e.key === "S")) {
     send({ type: "start" });
     return;
   }
-  if (state === "finished" && (e.key === "r" || e.key === "R")) {
+  if (!inInput && state === "finished" && (e.key === "r" || e.key === "R")) {
     send({ type: "restart" });
     return;
   }
 
-  if (isSpectator) return;
+  if (isSpectator || inInput) return;
 
   const map = {
     ArrowUp:    "UP",
@@ -913,6 +920,7 @@ nameInput.addEventListener("keydown", e => {
 
 startBtn.addEventListener("click",   () => send({ type: "start" }));
 restartBtn.addEventListener("click", () => send({ type: "restart" }));
+quitBtn.addEventListener("click",    () => send({ type: "restart" }));
 
 // ─── Settings panel ───────────────────────────────────────────────────────────
 

@@ -432,8 +432,8 @@ class WebSnakeServer:
                     self.logic._shrink_walls(g)
                     g.last_wall_shrink = now
 
-        # Game over
-        if alive <= 1 and len(g.snakes) > 1:
+        # Game over: last one standing wins (also ends solo games when player dies)
+        if alive == 0 or (alive <= 1 and len(g.snakes) > 1):
             g.state = GameState.FINISHED.value
             for pid, s in g.snakes.items():
                 if s["alive"]:
