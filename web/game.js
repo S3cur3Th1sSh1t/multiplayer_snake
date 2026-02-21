@@ -264,6 +264,10 @@ function updateHUD() {
   if (!gameState) return;
 
   // State label
+  const tr = gameState.time_remaining;
+  const timerStr = (gameState.state === "running" && tr != null)
+    ? `  ·  ⏰ ${Math.floor(tr/60)}:${String(tr%60).padStart(2,"0")}`
+    : "";
   const stateLabel = {
     waiting:   "⏳ LOBBY",
     countdown: `⏱ ${gameState.countdown || ""}`,
@@ -272,7 +276,7 @@ function updateHUD() {
   }[gameState.state] || gameState.state;
 
   const walls = gameState.walls_enabled ? "walls" : "wrap";
-  hudStatus.textContent = `${stateLabel}  ·  ${gameState.mode}  ·  ${gameState.speed}  ·  ${walls}`;
+  hudStatus.textContent = `${stateLabel}  ·  ${gameState.mode}  ·  ${gameState.speed}  ·  ${walls}${timerStr}`;
 
   // Weapon queue for my snake
   const mySnake = gameState.snakes?.[myPlayerId];

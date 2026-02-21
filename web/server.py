@@ -135,6 +135,12 @@ class WebSnakeServer:
         # Inject extra web-only fields not present in GameData dataclass
         d["shrinking_walls_enabled"] = getattr(self.game, "shrinking_walls_enabled", True)
         d["auto_restart_in"]         = getattr(self.game, "auto_restart_in", None)
+        # Time remaining in the current game (seconds), None when not running
+        started_at = getattr(self.game, "_game_started_at", None)
+        if started_at and self.game.state == GameState.RUNNING.value:
+            d["time_remaining"] = max(0, 600 - int(time.time() - started_at))
+        else:
+            d["time_remaining"] = None
         return d
 
     async def broadcast_state(self):
@@ -327,6 +333,22 @@ class WebSnakeServer:
                     self.game.state    = GameState.RUNNING.value
                     self.game.countdown = 0
                     log.info("Game running!")
+
+            # Track game start time
+            if self.game.state == GameState.RUNNING.value:
+                if getattr(self.game, "_game_started_at", None) is None:
+                    self.game._game_started_at = now
+
+            # 10-minute game time limit — force game over
+            if self.game.state == GameState.RUNNING.value:
+                started_at = getattr(self.game, "_game_started_at", None)
+                if started_at and (now - started_at) >= 600.0:
+                    log.info("10-minute time limit reached — ending game")
+                    # Kill all remaining snakes to trigger normal game-over flow
+                    for pid, snake in list(self.game.snakes.items()):
+                        if snake.get("alive"):
+                            snake["alive"] = False
+                    await self._tick(now)   # process deaths / winner calc
 
             # Auto-restart after FINISHED state lingers 10 s
             if self.game.state == GameState.FINISHED.value:
