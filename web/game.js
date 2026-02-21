@@ -148,14 +148,16 @@ function onMessage(evt) {
       }
     }
 
+    // Re-open lobby when game returns to waiting (restart)
+    if (welcomed && !isSpectator && gameState.state === "waiting") {
+      nameSection.classList.add("hidden");
+      lobbySection.classList.remove("hidden");
+      showOverlay("lobby");
+    }
+
     // First state received (not yet welcomed) → show name form
     if (!welcomed) {
-      if (gameState.state === "waiting") {
-        showOverlay("lobby");
-      } else {
-        // Game is already running; will auto-spectate after joining
-        showOverlay("lobby");
-      }
+      showOverlay("lobby");
     }
   }
 }
@@ -880,9 +882,10 @@ startBtn.addEventListener("click", () => send({ type: "start" }));
  */
 function syncSettingsUI() {
   if (!gameState) return;
-  setActiveBtn("settingMode",  gameState.mode);
-  setActiveBtn("settingSpeed", gameState.speed);
-  setActiveBtn("settingWalls", String(gameState.walls_enabled));
+  setActiveBtn("settingMode",   gameState.mode);
+  setActiveBtn("settingSpeed",  gameState.speed);
+  setActiveBtn("settingWalls",  String(gameState.walls_enabled));
+  setActiveBtn("settingShrink", String(gameState.shrinking_walls_enabled ?? true));
 }
 
 function setActiveBtn(groupId, value) {
@@ -903,9 +906,10 @@ document.querySelectorAll("#settingsPanel .sbtn").forEach(btn => {
     const value   = btn.dataset.value;
 
     const msg = { type: "settings" };
-    if      (groupId === "settingMode")  msg.mode  = value;
-    else if (groupId === "settingSpeed") msg.speed = value;
-    else if (groupId === "settingWalls") msg.walls = value === "true";
+    if      (groupId === "settingMode")   msg.mode             = value;
+    else if (groupId === "settingSpeed")  msg.speed            = value;
+    else if (groupId === "settingWalls")  msg.walls            = value === "true";
+    else if (groupId === "settingShrink") msg.shrinking_walls  = value === "true";
 
     send(msg);
 

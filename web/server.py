@@ -95,9 +95,10 @@ class WebSnakeServer:
     # ------------------------------------------------------------------ init
 
     def _reset_game(self, old: Optional[GameData] = None):
-        mode  = old.mode            if old else self._mode
-        speed = old.speed           if old else self._speed
-        walls = old.walls_enabled   if old else self._walls
+        mode     = old.mode            if old else self._mode
+        speed    = old.speed           if old else self._speed
+        walls    = old.walls_enabled   if old else self._walls
+        shrink   = getattr(old, "shrinking_walls_enabled", True) if old else True
 
         self.logic = SnakeGameLogic(
             player_id="server", player_name="Server", is_host=True,
@@ -112,6 +113,8 @@ class WebSnakeServer:
             next_weapon_spawn=time.time() + random.uniform(
                 WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX),
         )
+        # Extra web-only setting (not in GameData dataclass)
+        self.game.shrinking_walls_enabled = shrink
 
     def _new_player_id(self) -> str:
         self._next_id += 1
@@ -129,6 +132,8 @@ class WebSnakeServer:
         for pid, snake in d.get("snakes", {}).items():
             if snake.get("is_invisible", False) and pid != viewer_id:
                 snake["body"] = []
+        # Inject extra web-only field not present in GameData dataclass
+        d["shrinking_walls_enabled"] = getattr(self.game, "shrinking_walls_enabled", True)
         return d
 
     async def broadcast_state(self):
@@ -277,6 +282,14 @@ class WebSnakeServer:
                 changed = True
                 log.info(f"Walls → {walls_bool} (by {client.name})")
 
+        shrink = msg.get("shrinking_walls")
+        if shrink is not None:
+            shrink_bool = bool(shrink) if isinstance(shrink, bool) else str(shrink).lower() == "true"
+            if shrink_bool != getattr(self.game, "shrinking_walls_enabled", True):
+                self.game.shrinking_walls_enabled = shrink_bool
+                changed = True
+                log.info(f"Shrinking walls → {shrink_bool} (by {client.name})")
+
         if changed:
             await self.broadcast_state()
 
@@ -366,21 +379,22 @@ class WebSnakeServer:
         # Shrinking walls
         alive = sum(1 for s in g.snakes.values() if s["alive"])
 
-        if alive <= 3 and alive > 0 and not g.shrinking_walls_active:
-            g.shrinking_walls_active = True
-            g.walls_enabled = True
-            g.shrinking_wall_bounds = {
-                "top": 0, "bottom": g.height - 1,
-                "left": 0, "right": g.width - 1,
-            }
-            g.last_wall_shrink = now
-            log.info(f"Shrinking walls activated ({alive} players left)")
-
-        if g.shrinking_walls_active and alive > 0:
-            shrink_interval = 15.0 if alive == 3 else 10.0
-            if now - g.last_wall_shrink >= shrink_interval:
-                self.logic._shrink_walls(g)
+        if getattr(g, "shrinking_walls_enabled", True):
+            if alive <= 3 and alive > 0 and not g.shrinking_walls_active:
+                g.shrinking_walls_active = True
+                g.walls_enabled = True
+                g.shrinking_wall_bounds = {
+                    "top": 0, "bottom": g.height - 1,
+                    "left": 0, "right": g.width - 1,
+                }
                 g.last_wall_shrink = now
+                log.info(f"Shrinking walls activated ({alive} players left)")
+
+            if g.shrinking_walls_active and alive > 0:
+                shrink_interval = 15.0 if alive == 3 else 10.0
+                if now - g.last_wall_shrink >= shrink_interval:
+                    self.logic._shrink_walls(g)
+                    g.last_wall_shrink = now
 
         # Game over
         if alive <= 1 and len(g.snakes) > 1:
