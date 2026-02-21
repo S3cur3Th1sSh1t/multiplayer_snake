@@ -20,6 +20,7 @@ import random
 import copy
 import logging
 import argparse
+import secrets
 from dataclasses import asdict
 from typing import Dict, Optional
 
@@ -62,11 +63,13 @@ DEFAULT_HEIGHT = 45
 
 class Client:
     def __init__(self, ws: web.WebSocketResponse, player_id: str):
-        self.ws        = ws
-        self.player_id = player_id
-        self.name      = ""
-        self.joined    = False   # True while an active player in game.snakes
-        self.spectator = False   # True while only watching
+        self.ws              = ws
+        self.player_id       = player_id
+        self.name            = ""
+        self.joined          = False   # True while an active player in game.snakes
+        self.spectator       = False   # True while only watching
+        self.ip: str         = ""
+        self.msg_timestamps: list = []
 
     async def send(self, msg: dict):
         try:
@@ -88,6 +91,7 @@ class WebSnakeServer:
         self._next_id = 0
 
         self.clients: Dict[str, Client] = {}
+        self.sessions: dict = {}
         self.game:  Optional[GameData]      = None
         self.logic: Optional[SnakeGameLogic] = None
         self._reset_game()
@@ -115,6 +119,9 @@ class WebSnakeServer:
         )
         # Extra web-only setting (not in GameData dataclass)
         self.game.shrinking_walls_enabled = shrink
+        # Clear sessions on game reset
+        if hasattr(self, 'sessions'):
+            self.sessions.clear()
 
     def _new_player_id(self) -> str:
         self._next_id += 1
@@ -167,7 +174,15 @@ class WebSnakeServer:
             del self.clients[player_id]
             log.info(f"Client left: {name} ({player_id})")
         if self.game and player_id in self.game.snakes:
-            self.game.snakes[player_id]["alive"] = False
+            if self.game.state == GameState.WAITING.value:
+                del self.game.snakes[player_id]
+            else:
+                self.game.snakes[player_id]["alive"] = False
+        # Record disconnected_at in session instead of deleting
+        for token, session in self.sessions.items():
+            if session.get("player_id") == player_id:
+                session["disconnected_at"] = time.time()
+                break
 
     # ------------------------------------------------------------------ message handlers
 
@@ -176,8 +191,20 @@ class WebSnakeServer:
         if not client:
             return
 
+        # Anti-cheat: ignore if already joined
+        if client.joined:
+            return
+
         raw_name = str(msg.get("name", "Player"))
         name = "".join(c for c in raw_name if c.isprintable())[:16].strip() or "Player"
+
+        # Anti-cheat: reject duplicate session token
+        incoming_token = msg.get("token")
+        if incoming_token and incoming_token in self.sessions:
+            existing_pid = self.sessions[incoming_token].get("player_id")
+            if existing_pid and existing_pid != player_id and existing_pid in self.clients:
+                log.warning(f"Duplicate join attempt with token from {player_id}")
+                return
 
         can_play = (
             self.game.state == GameState.WAITING.value
@@ -185,14 +212,18 @@ class WebSnakeServer:
         )
 
         if can_play:
+            token = secrets.token_hex(16)
             client.name     = name
             client.joined   = True
             client.spectator = False
+            self.sessions[token] = {"name": name, "player_id": player_id, "disconnected_at": None}
             self.logic._add_player_to_game(self.game, player_id, name)
             await self._send(player_id, {
                 "type": "welcome",
                 "player_id": player_id,
                 "spectator": False,
+                "player_name": name,
+                "token": token,
                 "message": f"Welcome {name}!",
             })
             log.info(f"Player '{name}' joined ({player_id}), "
@@ -209,6 +240,42 @@ class WebSnakeServer:
 
         await self.broadcast_state()
 
+    async def handle_rejoin(self, player_id: str, msg: dict):
+        token = msg.get("token")
+        if not token or token not in self.sessions:
+            await self._send(player_id, {"type": "rejoin_failed"})
+            return
+
+        session = self.sessions[token]
+        if self.game.state != GameState.WAITING.value:
+            await self._send(player_id, {"type": "rejoin_failed"})
+            return
+
+        client = self.clients.get(player_id)
+        if not client or client.joined:
+            return
+
+        name = session["name"]
+        client.name      = name
+        client.joined    = True
+        client.spectator = False
+
+        # Update session with new player_id
+        session["player_id"]       = player_id
+        session["disconnected_at"] = None
+
+        self.logic._add_player_to_game(self.game, player_id, name)
+        await self._send(player_id, {
+            "type": "welcome",
+            "player_id": player_id,
+            "spectator": False,
+            "player_name": name,
+            "token": token,
+            "message": f"Welcome back {name}!",
+        })
+        log.info(f"Player '{name}' rejoined ({player_id})")
+        await self.broadcast_state()
+
     async def handle_start(self, player_id: str):
         if (self.game.state == GameState.WAITING.value
                 and len(self.game.snakes) > 0):
@@ -220,6 +287,10 @@ class WebSnakeServer:
     async def handle_input(self, player_id: str, msg: dict):
         client = self.clients.get(player_id)
         if not client or client.spectator:
+            return
+
+        # Anti-cheat: ignore inputs when game is not running
+        if self.game.state != GameState.RUNNING.value:
             return
 
         action = msg.get("action", "")
@@ -244,6 +315,12 @@ class WebSnakeServer:
     async def handle_restart(self, player_id: str):
         if self.game.state != GameState.FINISHED.value:
             return
+
+        # Anti-spam: only allow once per 2 seconds
+        now = time.time()
+        if now - getattr(self, '_last_restart_attempt', 0) < 2.0:
+            return
+        self._last_restart_attempt = now
 
         old = self.game
         self._reset_game(old)
@@ -308,6 +385,7 @@ class WebSnakeServer:
 
         t = msg.get("type", "")
         if   t == "join":     await self.handle_join(player_id, msg)
+        elif t == "rejoin":   await self.handle_rejoin(player_id, msg)
         elif t == "start":    await self.handle_start(player_id)
         elif t == "input":    await self.handle_input(player_id, msg)
         elif t == "restart":  await self.handle_restart(player_id)
@@ -318,10 +396,19 @@ class WebSnakeServer:
     async def game_loop(self):
         last_tick          = time.time()
         last_waiting_bcast = time.time()
+        last_session_cleanup = time.time()
 
         while True:
             now = time.time()
             tick_rate = SPEED_SETTINGS.get(self.game.speed, 0.15)
+
+            # Clean up stale disconnected sessions (older than 120 s)
+            if now - last_session_cleanup >= 1.0:
+                stale = [t for t, s in list(self.sessions.items())
+                         if s.get("disconnected_at") and now - s["disconnected_at"] > 120]
+                for t in stale:
+                    del self.sessions[t]
+                last_session_cleanup = now
 
             # Countdown
             if self.game.state == GameState.COUNTDOWN.value:
@@ -457,8 +544,17 @@ class WebSnakeServer:
         ws = web.WebSocketResponse(heartbeat=30)
         await ws.prepare(request)
 
+        # Max connections per IP
+        ip = request.remote
+        ip_count = sum(1 for c in self.clients.values() if getattr(c, 'ip', None) == ip)
+        if ip_count >= 3:
+            await ws.close(code=4029, message=b"Too many connections from this IP")
+            return ws
+
         player_id = self._new_player_id()
-        self.clients[player_id] = Client(ws, player_id)
+        client = Client(ws, player_id)
+        client.ip = ip
+        self.clients[player_id] = client
         log.info(f"WS connected: {player_id} from {request.remote}")
 
         # Send current state immediately so client can show lobby / spectate
@@ -470,6 +566,16 @@ class WebSnakeServer:
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
+                    # Message size limit
+                    if len(msg.data) > 1024:
+                        log.warning(f"Oversized message from {player_id} ({len(msg.data)} bytes) — dropping")
+                        continue
+                    # Rate limiting
+                    now = time.time()
+                    client.msg_timestamps = [t for t in client.msg_timestamps if now - t < 1.0]
+                    if len(client.msg_timestamps) > 60:
+                        continue  # drop — too fast
+                    client.msg_timestamps.append(now)
                     await self.handle_message(player_id, msg.data)
                 elif msg.type in (aiohttp.WSMsgType.ERROR,
                                   aiohttp.WSMsgType.CLOSE):
@@ -498,7 +604,16 @@ def make_app(server: "WebSnakeServer") -> web.Application:
         rel = request.path.lstrip("/") or "index.html"
         # Safety: prevent directory traversal
         filepath = os.path.normpath(os.path.join(web_dir, rel))
-        if not filepath.startswith(web_dir + os.sep) and filepath != web_dir:
+        try:
+            common = os.path.commonpath([filepath, web_dir])
+        except ValueError:
+            raise web.HTTPForbidden()
+        if common != web_dir:
+            raise web.HTTPForbidden()
+        # Only serve known file extensions
+        allowed_exts = {'.html', '.js', '.css', '.ico', '.png', '.woff2', ''}
+        _, ext = os.path.splitext(filepath)
+        if ext.lower() not in allowed_exts:
             raise web.HTTPForbidden()
         if os.path.isfile(filepath):
             return web.FileResponse(filepath)

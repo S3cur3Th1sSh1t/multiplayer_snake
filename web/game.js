@@ -28,6 +28,7 @@ let ws          = null;
 let gameState   = null;
 let myPlayerId  = null;
 let isSpectator = false;
+let rejoining   = false;
 
 /** JS-side particle list for explosion effects */
 const particles  = [];
@@ -111,11 +112,23 @@ function send(msg) {
 }
 
 function onOpen() {
-  // waiting for first state message from server
+  const raw = localStorage.getItem('snakeSession');
+  if (raw) {
+    try {
+      const { token, name } = JSON.parse(raw);
+      if (token) {
+        rejoining = true;
+        send({ type: "rejoin", token, name });
+        return;  // keep connecting overlay until welcome/rejoin_failed arrives
+      }
+    } catch {}
+  }
+  // No saved session — let the first state message show the name form
 }
 
 function onClose() {
   welcomed    = false;
+  rejoining   = false;
   myPlayerId  = null;
   gameState   = null;
   showOverlay("connecting");
@@ -132,6 +145,14 @@ function onMessage(evt) {
     myPlayerId  = msg.player_id;
     isSpectator = msg.spectator;
     welcomed    = true;
+    rejoining   = false;
+
+    // Persist session token and name for refresh-reconnect
+    if (msg.token) {
+      const name = msg.player_name || nameInput.value.trim();
+      localStorage.setItem('snakeSession', JSON.stringify({ token: msg.token, name }));
+      localStorage.setItem('snakeName', name);
+    }
 
     if (isSpectator) {
       showOverlay(null);
@@ -142,6 +163,11 @@ function onMessage(evt) {
       lobbySection.classList.remove("hidden");
       showOverlay("lobby");
     }
+
+  } else if (msg.type === "rejoin_failed") {
+    rejoining = false;
+    localStorage.removeItem('snakeSession');
+    showOverlay("lobby");
 
   } else if (msg.type === "state") {
     const prev = gameState;
@@ -159,13 +185,21 @@ function onMessage(evt) {
 
     // Re-open lobby when game returns to waiting (manual or auto restart)
     if (welcomed && gameState.state === "waiting") {
+      if (prev && prev.state === "finished") {
+        // Game restarted — server cleared sessions; invalidate our token
+        try {
+          const sess = JSON.parse(localStorage.getItem('snakeSession') || 'null');
+          if (sess && sess.name) localStorage.setItem('snakeName', sess.name);
+        } catch {}
+        localStorage.removeItem('snakeSession');
+      }
       nameSection.classList.add("hidden");
       lobbySection.classList.remove("hidden");
       showOverlay("lobby");
     }
 
-    // First state received (not yet welcomed) → show name form
-    if (!welcomed) {
+    // First state received (not yet welcomed) → show name form (skip if awaiting rejoin)
+    if (!welcomed && !rejoining) {
       showOverlay("lobby");
     }
   }
@@ -993,6 +1027,10 @@ window.addEventListener("resize",            checkOrientation);
 checkOrientation();
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
+
+// Pre-fill name from previous session
+const _savedName = localStorage.getItem('snakeName');
+if (_savedName) nameInput.value = _savedName;
 
 showOverlay("connecting");
 connect();
