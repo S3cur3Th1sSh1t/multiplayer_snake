@@ -922,6 +922,7 @@ class SnakeGameLogic:
                 'direction': snake['direction'],
                 'owner_id': snake['player_id'],
                 'remaining_range': 999999,
+                'traveled': 0,          # track distance for owner-safe zone
                 'weapon_type': 'nuclear'
             }
             game.bombs.append(bomb)
@@ -958,6 +959,7 @@ class SnakeGameLogic:
                 bomb['remaining_range'] -= 1
 
                 if weapon_type == 'nuclear':
+                    bomb['traveled'] = bomb.get('traveled', 0) + 1
                     # Nuclear bombs always wrap around, never hit walls
                     if bomb['x'] <= 0:
                         bomb['x'] = game.width - 2
@@ -968,9 +970,13 @@ class SnakeGameLogic:
                     elif bomb['y'] >= game.height - 1:
                         bomb['y'] = 1
                     
-                    # Check 2x2 hit area
+                    # Check 2x2 hit area — owner is immune until bomb has
+                    # traveled at least 10 cells (prevents instant self-kill)
+                    owner_safe = bomb['traveled'] < 10
                     hit = False
                     for player_id, snake in game.snakes.items():
+                        if owner_safe and player_id == bomb['owner_id']:
+                            continue
                         for seg in snake['body']:
                             if (seg[0] in (bomb['x'], bomb['x']+1) and
                                 seg[1] in (bomb['y'], bomb['y']+1)):
