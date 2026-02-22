@@ -94,7 +94,8 @@ WEAPON_SHOTGUN = "shotgun"
 WEAPON_NUCLEAR = "nuclear"
 SHOTGUN_BURST_COUNT = 10       # shots in a burst
 SHOTGUN_BURST_INTERVAL = 0.2   # seconds between shots
-NUCLEAR_EXPLOSION_HALF = 5     # half-size of 10x10 explosion area
+NUCLEAR_EXPLOSION_HALF  = 5     # half-size of 10x10 explosion area
+NUCLEAR_OWNER_GRACE     = 3.5   # seconds the owner is immune to their own nuke after firing
 SHOTGUN_SYMBOL = "S"           # terminal symbol for shotgun pickup
 NUCLEAR_SYMBOL = "N"           # terminal symbol for nuclear pickup
 
@@ -922,7 +923,8 @@ class SnakeGameLogic:
                 'direction': snake['direction'],
                 'owner_id': snake['player_id'],
                 'remaining_range': 999999,
-                'weapon_type': 'nuclear'
+                'weapon_type': 'nuclear',
+                'fired_at': current_time or time.time(),
             }
             game.bombs.append(bomb)
     
@@ -968,19 +970,23 @@ class SnakeGameLogic:
                     elif bomb['y'] >= game.height - 1:
                         bomb['y'] = 1
                     
-                    # Check 2x2 hit area.
-                    # Owner is permanently excluded while other alive snakes
-                    # exist — the bomb is meant to hunt opponents, not the
-                    # shooter's own coiled body. Falls back to including owner
-                    # only in solo play (no other alive snakes).
+                    # Owner exclusion logic:
+                    # - Always excluded while other alive players exist (multiplayer).
+                    # - Always excluded during the grace period after firing (prevents
+                    #   instant self-kill on launch, especially in solo play).
+                    # - After the grace period with no other alive targets the owner
+                    #   becomes a valid hit (bomb comes back around in solo play).
                     other_alive = any(
                         s.get('alive', False)
                         for pid, s in game.snakes.items()
                         if pid != bomb['owner_id']
                     )
+                    grace_active = (time.time() - bomb.get('fired_at', 0)) < NUCLEAR_OWNER_GRACE
+                    exclude_owner = other_alive or grace_active
+
                     hit = False
                     for player_id, snake in game.snakes.items():
-                        if other_alive and player_id == bomb['owner_id']:
+                        if exclude_owner and player_id == bomb['owner_id']:
                             continue
                         for seg in snake['body']:
                             if (seg[0] in (bomb['x'], bomb['x']+1) and
