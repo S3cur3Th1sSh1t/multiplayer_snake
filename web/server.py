@@ -56,6 +56,14 @@ MAX_PLAYERS = 10
 DEFAULT_WIDTH  = 80
 DEFAULT_HEIGHT = 45
 
+# Integer → canonical-string maps for settings received from clients.
+# Clients MUST send an integer index; the server generates the string value
+# internally, so no user-supplied string ever reaches the game engine.
+_MODE_MAP   = {0: "classic", 1: "kurve"}
+_SPEED_MAP  = {0: "normal",  1: "fast", 2: "ultra"}
+_WEAPON_MAP = {0: "bomb", 1: "ghost", 2: "shotgun", 3: "nuclear"}
+_ALL_WEAPONS: frozenset = frozenset(_WEAPON_MAP.values())
+
 
 # ---------------------------------------------------------------------------
 # Client record
@@ -99,10 +107,11 @@ class WebSnakeServer:
     # ------------------------------------------------------------------ init
 
     def _reset_game(self, old: Optional[GameData] = None):
-        mode     = old.mode            if old else self._mode
-        speed    = old.speed           if old else self._speed
-        walls    = old.walls_enabled   if old else self._walls
-        shrink   = getattr(old, "shrinking_walls_enabled", True) if old else True
+        mode            = old.mode            if old else self._mode
+        speed           = old.speed           if old else self._speed
+        walls           = old.walls_enabled   if old else self._walls
+        shrink          = getattr(old, "shrinking_walls_enabled", True) if old else True
+        enabled_weapons = set(getattr(old, "enabled_weapons", _ALL_WEAPONS)) if old else set(_ALL_WEAPONS)
 
         self.logic = SnakeGameLogic(
             player_id="server", player_name="Server", is_host=True,
@@ -117,8 +126,9 @@ class WebSnakeServer:
             next_weapon_spawn=time.time() + random.uniform(
                 WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX),
         )
-        # Extra web-only setting (not in GameData dataclass)
+        # Extra web-only settings (not in GameData dataclass)
         self.game.shrinking_walls_enabled = shrink
+        self.game.enabled_weapons         = enabled_weapons
         # Clear sessions on game reset
         if hasattr(self, 'sessions'):
             self.sessions.clear()
@@ -141,6 +151,7 @@ class WebSnakeServer:
                 snake["body"] = []
         # Inject extra web-only fields not present in GameData dataclass
         d["shrinking_walls_enabled"] = getattr(self.game, "shrinking_walls_enabled", True)
+        d["enabled_weapons"]         = sorted(getattr(self.game, "enabled_weapons", _ALL_WEAPONS))
         d["auto_restart_in"]         = getattr(self.game, "auto_restart_in", None)
         # Time remaining in the current game (seconds), None when not running
         started_at = getattr(self.game, "_game_started_at", None)
@@ -334,45 +345,109 @@ class WebSnakeServer:
         log.info("Game restarted – back to WAITING")
 
     async def handle_settings(self, player_id: str, msg: dict):
-        """Allow any lobby player to change game settings before start."""
+        """Allow any lobby player to change game settings before start.
+
+        All setting values MUST arrive as integers (see _MODE_MAP / _SPEED_MAP).
+        The server maps integers to canonical strings internally so no
+        user-supplied string ever enters the game engine.
+        """
         client = self.clients.get(player_id)
         if not client or client.spectator:
             return
         if self.game.state != GameState.WAITING.value:
             return   # settings locked once game starts
 
+        # Per-client rate-limit: at most one settings change per 0.5 s
+        now = time.time()
+        if now - getattr(client, "_last_settings", 0) < 0.5:
+            return
+        client._last_settings = now
+
         changed = False
-        mode  = msg.get("mode")
-        speed = msg.get("speed")
-        walls = msg.get("walls")
 
-        if mode in ("classic", "kurve") and mode != self.game.mode:
-            self.game.mode = mode
-            self.logic.mode = mode
-            changed = True
-            log.info(f"Mode → {mode} (by {client.name})")
+        # --- mode (integer index → canonical string) ----------------------
+        raw_mode = msg.get("mode")
+        if raw_mode is not None:
+            try:
+                mode = _MODE_MAP[int(raw_mode)]
+            except (KeyError, TypeError, ValueError):
+                mode = None
+            if mode and mode != self.game.mode:
+                self.game.mode = mode
+                self.logic.mode = mode
+                changed = True
+                log.info(f"Mode → {mode} (by {client.name})")
 
-        if speed in ("normal", "fast", "ultra") and speed != self.game.speed:
-            self.game.speed = speed
-            self.logic.speed = speed
-            changed = True
-            log.info(f"Speed → {speed} (by {client.name})")
+        # --- speed (integer index → canonical string) ---------------------
+        raw_speed = msg.get("speed")
+        if raw_speed is not None:
+            try:
+                speed = _SPEED_MAP[int(raw_speed)]
+            except (KeyError, TypeError, ValueError):
+                speed = None
+            if speed and speed != self.game.speed:
+                self.game.speed = speed
+                self.logic.speed = speed
+                changed = True
+                log.info(f"Speed → {speed} (by {client.name})")
 
-        if walls is not None:
-            walls_bool = bool(walls) if isinstance(walls, bool) else str(walls).lower() == "true"
-            if walls_bool != self.game.walls_enabled:
+        # --- walls (integer 0/1 only) -------------------------------------
+        raw_walls = msg.get("walls")
+        if raw_walls is not None:
+            try:
+                walls_int = int(raw_walls)
+                if walls_int not in (0, 1):
+                    raise ValueError
+                walls_bool = bool(walls_int)
+            except (TypeError, ValueError):
+                walls_bool = None
+            if walls_bool is not None and walls_bool != self.game.walls_enabled:
                 self.game.walls_enabled = walls_bool
                 self.logic.walls_enabled = walls_bool
                 changed = True
                 log.info(f"Walls → {walls_bool} (by {client.name})")
 
-        shrink = msg.get("shrinking_walls")
-        if shrink is not None:
-            shrink_bool = bool(shrink) if isinstance(shrink, bool) else str(shrink).lower() == "true"
-            if shrink_bool != getattr(self.game, "shrinking_walls_enabled", True):
+        # --- shrinking walls (integer 0/1 only) ---------------------------
+        raw_shrink = msg.get("shrinking_walls")
+        if raw_shrink is not None:
+            try:
+                shrink_int = int(raw_shrink)
+                if shrink_int not in (0, 1):
+                    raise ValueError
+                shrink_bool = bool(shrink_int)
+            except (TypeError, ValueError):
+                shrink_bool = None
+            if shrink_bool is not None and shrink_bool != getattr(self.game, "shrinking_walls_enabled", True):
                 self.game.shrinking_walls_enabled = shrink_bool
                 changed = True
                 log.info(f"Shrinking walls → {shrink_bool} (by {client.name})")
+
+        # --- weapon toggle (integer 0-3 + enabled 0/1) -------------------
+        raw_weapon  = msg.get("weapon")
+        raw_wstate  = msg.get("weapon_enabled")
+        if raw_weapon is not None and raw_wstate is not None:
+            try:
+                weapon_name = _WEAPON_MAP[int(raw_weapon)]
+                w_on_int = int(raw_wstate)
+                if w_on_int not in (0, 1):
+                    raise ValueError
+                w_on = bool(w_on_int)
+            except (KeyError, TypeError, ValueError):
+                weapon_name = None
+                w_on = None
+            if weapon_name is not None:
+                ew = getattr(self.game, "enabled_weapons", set(_ALL_WEAPONS))
+                was_on = weapon_name in ew
+                if w_on and not was_on:
+                    ew.add(weapon_name)
+                    self.game.enabled_weapons = ew
+                    changed = True
+                    log.info(f"Weapon {weapon_name} → enabled (by {client.name})")
+                elif not w_on and was_on:
+                    ew.discard(weapon_name)
+                    self.game.enabled_weapons = ew
+                    changed = True
+                    log.info(f"Weapon {weapon_name} → disabled (by {client.name})")
 
         if changed:
             await self.broadcast_state()
@@ -484,21 +559,26 @@ class WebSnakeServer:
         self.logic._check_collisions(g)
         self.logic._update_rankings(g)
 
-        # Spawn weapons
+        # Spawn weapons — only those enabled in lobby settings
         if now >= g.next_weapon_spawn:
             alive = max(1, sum(1 for s in g.snakes.values() if s["alive"]))
-            choice = random.choices(
-                ["bomb", "ghost", "shotgun", "nuclear"],
-                weights=[1.0, 1.0, 1.0, 0.3],
-            )[0]
-            {
-                "bomb":    self.logic._spawn_weapon,
-                "ghost":   self.logic._spawn_ghost,
-                "shotgun": self.logic._spawn_shotgun,
-                "nuclear": self.logic._spawn_nuclear,
-            }[choice](g)
-            interval = random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX) / alive
-            g.next_weapon_spawn = now + max(1.0, interval)
+            enabled = getattr(g, "enabled_weapons", _ALL_WEAPONS)
+            _w_weights = {"bomb": 1.0, "ghost": 1.0, "shotgun": 1.0, "nuclear": 0.3}
+            weapon_pool = [w for w in ("bomb", "ghost", "shotgun", "nuclear") if w in enabled]
+            if weapon_pool:
+                weights = [_w_weights[w] for w in weapon_pool]
+                choice = random.choices(weapon_pool, weights=weights)[0]
+                {
+                    "bomb":    self.logic._spawn_weapon,
+                    "ghost":   self.logic._spawn_ghost,
+                    "shotgun": self.logic._spawn_shotgun,
+                    "nuclear": self.logic._spawn_nuclear,
+                }[choice](g)
+                interval = random.uniform(WEAPON_SPAWN_MIN, WEAPON_SPAWN_MAX) / alive
+                g.next_weapon_spawn = now + max(1.0, interval)
+            else:
+                # No weapons enabled — recheck after 5 s
+                g.next_weapon_spawn = now + 5.0
 
         # Shrinking walls — only if walls are enabled AND shrinking is enabled
         alive = sum(1 for s in g.snakes.values() if s["alive"])

@@ -15,6 +15,10 @@ const PLAYER_COLORS = [
 
 const WEAPON_ICONS = { bomb: "💣", ghost: "👻", shotgun: "🔫", nuclear: "☢️" };
 
+// Integer indices sent to the server for settings (must match _MODE_MAP / _SPEED_MAP in server.py)
+const MODE_VALUES  = { classic: 0, kurve: 1 };
+const SPEED_VALUES = { normal: 0, fast: 1, ultra: 2 };
+
 // Direction indices (match Python enum)
 const DIR = { UP: 0, DOWN: 1, LEFT: 2, RIGHT: 3 };
 
@@ -299,7 +303,7 @@ function updateGameOverOverlay() {
 function escHtml(s) {
   return String(s)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;")
-    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
 
 function updateHUD() {
@@ -984,6 +988,13 @@ function syncSettingsUI() {
   setActiveBtn("settingSpeed",  gameState.speed);
   setActiveBtn("settingWalls",  String(gameState.walls_enabled));
   setActiveBtn("settingShrink", String(gameState.shrinking_walls_enabled ?? true));
+
+  // Weapon toggles — each button is independently active/inactive
+  const ew = new Set(gameState.enabled_weapons || ["bomb","ghost","shotgun","nuclear"]);
+  const wnames = ["bomb","ghost","shotgun","nuclear"];
+  document.querySelectorAll("#settingWeapons .wbtn").forEach(btn => {
+    btn.classList.toggle("active", ew.has(wnames[parseInt(btn.dataset.weapon, 10)]));
+  });
 }
 
 function setActiveBtn(groupId, value) {
@@ -995,7 +1006,8 @@ function setActiveBtn(groupId, value) {
 }
 
 // Wire each settings button to send a settings message
-document.querySelectorAll("#settingsPanel .sbtn").forEach(btn => {
+// (weapon buttons .wbtn are handled separately below — they are independent toggles)
+document.querySelectorAll("#settingsPanel .sbtn:not(.wbtn)").forEach(btn => {
   btn.addEventListener("click", () => {
     if (isSpectator) return;
     if (!gameState || gameState.state !== "waiting") return;
@@ -1004,15 +1016,34 @@ document.querySelectorAll("#settingsPanel .sbtn").forEach(btn => {
     const value   = btn.dataset.value;
 
     const msg = { type: "settings" };
-    if      (groupId === "settingMode")   msg.mode             = value;
-    else if (groupId === "settingSpeed")  msg.speed            = value;
-    else if (groupId === "settingWalls")  msg.walls            = value === "true";
-    else if (groupId === "settingShrink") msg.shrinking_walls  = value === "true";
+    if      (groupId === "settingMode")   msg.mode            = MODE_VALUES[value];
+    else if (groupId === "settingSpeed")  msg.speed           = SPEED_VALUES[value];
+    else if (groupId === "settingWalls")  msg.walls           = value === "true" ? 1 : 0;
+    else if (groupId === "settingShrink") msg.shrinking_walls = value === "true" ? 1 : 0;
 
     send(msg);
 
     // Optimistic UI: mark this button active immediately
     setActiveBtn(groupId, value);
+  });
+});
+
+// Weapon toggle buttons — each is an independent on/off toggle
+const _WEAPON_NAMES = ["bomb", "ghost", "shotgun", "nuclear"];
+document.querySelectorAll("#settingWeapons .wbtn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (isSpectator) return;
+    if (!gameState || gameState.state !== "waiting") return;
+
+    const weaponIdx = parseInt(btn.dataset.weapon, 10);
+    const ew        = new Set(gameState.enabled_weapons || _WEAPON_NAMES);
+    const wname     = _WEAPON_NAMES[weaponIdx];
+    const newOn     = ew.has(wname) ? 0 : 1;   // toggle
+
+    send({ type: "settings", weapon: weaponIdx, weapon_enabled: newOn });
+
+    // Optimistic UI
+    btn.classList.toggle("active", newOn === 1);
   });
 });
 
