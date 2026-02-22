@@ -173,6 +173,43 @@ html, body {
 #hudCenter { flex: 1; text-align: center; color: var(--accent); overflow: hidden; white-space: nowrap; }
 #hudRight  { color: #ffd700; min-width: 100px; text-align: right; }
 
+/* ─── Weapon queue display ──────────────────────────────────── */
+.wq-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  vertical-align: middle;
+}
+.wq-item {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 6px;
+  padding: 1px 5px;
+  line-height: 1.1;
+  font-size: 1rem;
+  min-width: 30px;
+}
+.wq-item.wq-next {
+  background: rgba(79,195,247,.22);
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 6px rgba(79,195,247,.5);
+  transform: scale(1.08);
+}
+.wq-label-txt {
+  font-size: .52rem;
+  color: var(--accent);
+  letter-spacing: .04em;
+  line-height: 1;
+}
+.wq-sep {
+  color: var(--muted);
+  font-size: .9rem;
+  padding: 0 1px;
+}
+
 /* Spectator banner */
 #spectatorBanner {
   width: 100%;

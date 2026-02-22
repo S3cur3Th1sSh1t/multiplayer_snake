@@ -34,6 +34,9 @@ let myPlayerId  = null;
 let isSpectator = false;
 let rejoining   = false;
 
+/** Timestamp (ms) when state first became "finished", for 5-s field-view delay */
+let finishedAt  = null;
+
 /** JS-side particle list for explosion effects */
 const particles  = [];
 let prevExplosions = [];   // to detect newly spawned explosions
@@ -181,6 +184,13 @@ function onMessage(evt) {
     checkNewExplosions();
     updateUI();
 
+    // Track when game first entered "finished" for 5-s field-view delay
+    if (gameState.state === "finished") {
+      if (finishedAt === null) finishedAt = Date.now();
+    } else {
+      finishedAt = null;
+    }
+
     // Close lobby/gameover when game starts
     if (welcomed && !isSpectator &&
         (gameState.state === "running" || gameState.state === "countdown")) {
@@ -250,10 +260,26 @@ function updateUI() {
     spectatorBanner.classList.remove("hidden");
   }
 
-  // Game-over overlay
+  // Game-over overlay — only show after 5-second field-view delay
   if (gameState.state === "finished") {
-    updateGameOverOverlay();
-    showOverlay("gameover");
+    const elapsed = finishedAt !== null ? Date.now() - finishedAt : 0;
+    if (elapsed >= 5000) {
+      updateGameOverOverlay();
+      showOverlay("gameover");
+    }
+  }
+
+  // Update fire button to show next weapon icon on mobile
+  const mySnakeHUD = gameState.snakes?.[myPlayerId];
+  const nextWeapon = mySnakeHUD?.weapon_queue?.[0];
+  const fireBtn = document.getElementById("fireBtn");
+  if (fireBtn) {
+    if (nextWeapon) {
+      const icon = WEAPON_ICONS[nextWeapon] || "🔥";
+      fireBtn.innerHTML = `${icon}<br><span style="font-size:.65em">FIRE</span>`;
+    } else {
+      fireBtn.innerHTML = "🔥<br>FIRE";
+    }
   }
 
   // HUD
@@ -324,13 +350,24 @@ function updateHUD() {
   const walls = gameState.walls_enabled ? "walls" : "wrap";
   hudStatus.textContent = `${stateLabel}  ·  ${gameState.mode}  ·  ${gameState.speed}  ·  ${walls}${timerStr}`;
 
-  // Weapon queue for my snake
+  // Weapon queue for my snake — visual icon queue
   const mySnake = gameState.snakes?.[myPlayerId];
   if (mySnake && mySnake.weapon_queue && mySnake.weapon_queue.length > 0) {
-    const icons = mySnake.weapon_queue.map(w => WEAPON_ICONS[w] || w).join(" › ");
-    hudWeapons.textContent = `SPACE: ${icons}`;
+    const queue = mySnake.weapon_queue;
+    const parts = queue.map((w, i) => {
+      const icon = WEAPON_ICONS[w] || w;
+      if (i === 0) {
+        // Next to fire — highlighted
+        return `<span class="wq-item wq-next" title="Next: ${w}">` +
+               `<span class="wq-icon">${icon}</span>` +
+               `<span class="wq-label-txt">NEXT</span></span>`;
+      }
+      return `<span class="wq-sep">›</span>` +
+             `<span class="wq-item" title="${w}"><span class="wq-icon">${icon}</span></span>`;
+    });
+    hudWeapons.innerHTML = `<span class="wq-wrap">${parts.join("")}</span>`;
   } else {
-    hudWeapons.textContent = "";
+    hudWeapons.innerHTML = "";
   }
 
   // Score

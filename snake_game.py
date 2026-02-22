@@ -970,19 +970,9 @@ class SnakeGameLogic:
                     elif bomb['y'] >= game.height - 1:
                         bomb['y'] = 1
                     
-                    # Owner exclusion logic:
-                    # - Always excluded while other alive players exist (multiplayer).
-                    # - Always excluded during the grace period after firing (prevents
-                    #   instant self-kill on launch, especially in solo play).
-                    # - After the grace period with no other alive targets the owner
-                    #   becomes a valid hit (bomb comes back around in solo play).
-                    other_alive = any(
-                        s.get('alive', False)
-                        for pid, s in game.snakes.items()
-                        if pid != bomb['owner_id']
-                    )
-                    grace_active = (time.time() - bomb.get('fired_at', 0)) < NUCLEAR_OWNER_GRACE
-                    exclude_owner = other_alive or grace_active
+                    # The owner is always excluded from being hit by their own
+                    # nuclear bomb — they can never be killed by it.
+                    exclude_owner = True
 
                     hit = False
                     for player_id, snake in game.snakes.items():
@@ -2456,11 +2446,13 @@ class NetworkTerminalClient:
                 pass
             
             if game.state == GameState.WAITING.value:
+                self._finished_at = None
                 player_count = len(game.snakes)
                 walls_str = "WALLS" if game.walls_enabled else "NO-WALLS"
                 status = f" WAITING - {player_count} player(s) | Mode: {game.mode.upper()} | Speed: {game.speed.upper()} | {walls_str}"
                 status += " | Press 'S' to START"
             elif game.state == GameState.COUNTDOWN.value:
+                self._finished_at = None
                 status = f" >>> STARTING IN {game.countdown} <<< "
             elif game.state == GameState.RUNNING.value:
                 my_snake = game.snakes.get(self.client.player_id, {})
@@ -2476,6 +2468,8 @@ class NetworkTerminalClient:
                 status = f" Score: {score} | {alive_status}{weapon_status} | Speed: {game.speed.upper()}"
             else:
                 # FINISHED state - Show winner and rankings
+                if not hasattr(self, '_finished_at') or self._finished_at is None:
+                    self._finished_at = time.time()
                 status = f" *** {game.winner} WINS! ***"
                 # Show rankings if available
                 if game.player_rankings:
@@ -2485,8 +2479,8 @@ class NetworkTerminalClient:
                         rank_label = medals.get(r['rank'], f"{r['rank']}th")
                         rankings_str += f"{rank_label}:{r['player_name']}({r['score']}) "
                     status += rankings_str[:self.width//2]
-                status += " | Press R:restart Q:quit"
-
+                if time.time() - self._finished_at >= 5.0:
+                    status += " | Press R:restart Q:quit"
             try:
                 self.stdscr.addstr(status_y, 0, status[:self.width-1])
             except:
@@ -3245,6 +3239,7 @@ class GUIGame:
         status_y = (game.height + 1) * cs + 10
         
         if game.state == GameState.WAITING.value:
+            self._finished_at = None
             walls_str = "WALLS" if game.walls_enabled else "NO-WALLS"
             text = f"WAITING - {len(game.snakes)} player(s) | Mode: {game.mode.upper()} | Speed: {game.speed.upper()} | {walls_str}"
             if self.logic.is_host:
@@ -3252,6 +3247,7 @@ class GUIGame:
             text_surf = self.font.render(text, True, (255, 255, 255))
             self.screen.blit(text_surf, (10, status_y))
         elif game.state == GameState.COUNTDOWN.value:
+            self._finished_at = None
             # Draw big countdown in center of screen
             countdown_text = str(game.countdown) if game.countdown > 0 else "GO!"
             countdown_font = pygame.font.Font(None, 200)
@@ -3277,49 +3273,51 @@ class GUIGame:
             text_surf = self.font.render(text, True, (255, 255, 255))
             self.screen.blit(text_surf, (10, status_y))
         else:
-            # FINISHED state - Show FAT winner text and rankings
-            # Winner announcement with LARGE text
-            winner_font = pygame.font.Font(None, 120)
-            winner_text = f"{game.winner} WINS!"
-            winner_surf = winner_font.render(winner_text, True, (255, 215, 0))  # Gold color
-            winner_rect = winner_surf.get_rect(center=(self.screen_width // 2, 100))
+            # FINISHED state — track when we first entered it
+            if not hasattr(self, '_finished_at') or self._finished_at is None:
+                self._finished_at = time.time()
+            elapsed = time.time() - self._finished_at
 
-            # Add shadow for better visibility
-            shadow_surf = winner_font.render(winner_text, True, (0, 0, 0))
-            shadow_rect = shadow_surf.get_rect(center=(self.screen_width // 2 + 3, 103))
-            self.screen.blit(shadow_surf, shadow_rect)
-            self.screen.blit(winner_surf, winner_rect)
+            if elapsed >= 5.0:
+                # Show FAT winner text and rankings after 5-second field view
+                winner_font = pygame.font.Font(None, 120)
+                winner_text = f"{game.winner} WINS!"
+                winner_surf = winner_font.render(winner_text, True, (255, 215, 0))
+                winner_rect = winner_surf.get_rect(center=(self.screen_width // 2, 100))
 
-            # Display rankings
-            rankings_font = pygame.font.Font(None, 48)
-            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+                shadow_surf = winner_font.render(winner_text, True, (0, 0, 0))
+                shadow_rect = shadow_surf.get_rect(center=(self.screen_width // 2 + 3, 103))
+                self.screen.blit(shadow_surf, shadow_rect)
+                self.screen.blit(winner_surf, winner_rect)
 
-            y_offset = 200
-            for ranking in game.player_rankings[:3]:  # Show top 3
-                rank = ranking['rank']
-                name = ranking['player_name']
-                score = ranking['score']
+                rankings_font = pygame.font.Font(None, 48)
+                medals = {1: "🥇", 2: "🥈", 3: "🥉"}
 
-                # Get medal or rank number
-                medal = medals.get(rank, f"{rank}.")
-                rank_text = f"{medal} {name} - {score} points"
+                y_offset = 200
+                for ranking in game.player_rankings[:3]:
+                    rank = ranking['rank']
+                    name = ranking['player_name']
+                    score = ranking['score']
+                    medal = medals.get(rank, f"{rank}.")
+                    rank_text = f"{medal} {name} - {score} points"
+                    if rank == 1:
+                        text_surf = rankings_font.render(rank_text, True, (255, 215, 0))
+                    elif rank == 2:
+                        text_surf = pygame.font.Font(None, 42).render(rank_text, True, (192, 192, 192))
+                    elif rank == 3:
+                        text_surf = pygame.font.Font(None, 38).render(rank_text, True, (205, 127, 50))
+                    text_rect = text_surf.get_rect(center=(self.screen_width // 2, y_offset))
+                    self.screen.blit(text_surf, text_rect)
+                    y_offset += 60
 
-                # Different font sizes for different ranks
-                if rank == 1:
-                    text_surf = rankings_font.render(rank_text, True, (255, 215, 0))  # Gold
-                elif rank == 2:
-                    text_surf = pygame.font.Font(None, 42).render(rank_text, True, (192, 192, 192))  # Silver
-                elif rank == 3:
-                    text_surf = pygame.font.Font(None, 38).render(rank_text, True, (205, 127, 50))  # Bronze
-
-                text_rect = text_surf.get_rect(center=(self.screen_width // 2, y_offset))
-                self.screen.blit(text_surf, text_rect)
-                y_offset += 60
-
-            # Instructions at bottom
-            text = "Press 'Q' to quit"
-            text_surf = self.font.render(text, True, (200, 200, 200))
-            self.screen.blit(text_surf, (10, status_y))
+                text = "Press 'Q' to quit"
+                text_surf = self.font.render(text, True, (200, 200, 200))
+                self.screen.blit(text_surf, (10, status_y))
+            else:
+                remaining = int(5.0 - elapsed) + 1
+                text = f"{game.winner} wins!  (results in {remaining}s)"
+                text_surf = self.font.render(text, True, (255, 215, 0))
+                self.screen.blit(text_surf, (10, status_y))
 
         # Player list
         player_x = 10
@@ -3829,12 +3827,14 @@ class NetworkGUIClient:
         status_y = (game.height + 1) * cs + 10
         
         if game.state == GameState.WAITING.value:
+            self._finished_at = None
             walls_str = "WALLS" if game.walls_enabled else "NO-WALLS"
             text = f"WAITING - {len(game.snakes)} player(s) | Mode: {game.mode.upper()} | Speed: {game.speed.upper()} | {walls_str}"
             text += " | Press 'S' to START"
             text_surf = self.font.render(text, True, (255, 255, 255))
             self.screen.blit(text_surf, (10, status_y))
         elif game.state == GameState.COUNTDOWN.value:
+            self._finished_at = None
             countdown_text = str(game.countdown) if game.countdown > 0 else "GO!"
             countdown_font = pygame.font.Font(None, 200)
             countdown_surf = countdown_font.render(countdown_text, True, (255, 255, 0))
@@ -3857,49 +3857,58 @@ class NetworkGUIClient:
             text_surf = self.font.render(text, True, (255, 255, 255))
             self.screen.blit(text_surf, (10, status_y))
         else:
-            # FINISHED state - Show FAT winner text and rankings
-            # Winner announcement with LARGE text
-            winner_font = pygame.font.Font(None, 120)
-            winner_text = f"{game.winner} WINS!"
-            winner_surf = winner_font.render(winner_text, True, (255, 215, 0))  # Gold color
-            winner_rect = winner_surf.get_rect(center=(self.screen_width // 2, 100))
+            # FINISHED state — track when we first entered it
+            if not hasattr(self, '_finished_at') or self._finished_at is None:
+                self._finished_at = time.time()
+            elapsed = time.time() - self._finished_at
 
-            # Add shadow for better visibility
-            shadow_surf = winner_font.render(winner_text, True, (0, 0, 0))
-            shadow_rect = shadow_surf.get_rect(center=(self.screen_width // 2 + 3, 103))
-            self.screen.blit(shadow_surf, shadow_rect)
-            self.screen.blit(winner_surf, winner_rect)
+            if elapsed >= 5.0:
+                # Show FAT winner text and rankings after 5-second field view
+                winner_font = pygame.font.Font(None, 120)
+                winner_text = f"{game.winner} WINS!"
+                winner_surf = winner_font.render(winner_text, True, (255, 215, 0))  # Gold color
+                winner_rect = winner_surf.get_rect(center=(self.screen_width // 2, 100))
 
-            # Display rankings
-            rankings_font = pygame.font.Font(None, 48)
-            medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+                # Add shadow for better visibility
+                shadow_surf = winner_font.render(winner_text, True, (0, 0, 0))
+                shadow_rect = shadow_surf.get_rect(center=(self.screen_width // 2 + 3, 103))
+                self.screen.blit(shadow_surf, shadow_rect)
+                self.screen.blit(winner_surf, winner_rect)
 
-            y_offset = 200
-            for ranking in game.player_rankings[:3]:  # Show top 3
-                rank = ranking['rank']
-                name = ranking['player_name']
-                score = ranking['score']
+                # Display rankings
+                rankings_font = pygame.font.Font(None, 48)
+                medals = {1: "🥇", 2: "🥈", 3: "🥉"}
 
-                # Get medal or rank number
-                medal = medals.get(rank, f"{rank}.")
-                rank_text = f"{medal} {name} - {score} points"
+                y_offset = 200
+                for ranking in game.player_rankings[:3]:  # Show top 3
+                    rank = ranking['rank']
+                    name = ranking['player_name']
+                    score = ranking['score']
 
-                # Different font sizes for different ranks
-                if rank == 1:
-                    text_surf = rankings_font.render(rank_text, True, (255, 215, 0))  # Gold
-                elif rank == 2:
-                    text_surf = pygame.font.Font(None, 42).render(rank_text, True, (192, 192, 192))  # Silver
-                elif rank == 3:
-                    text_surf = pygame.font.Font(None, 38).render(rank_text, True, (205, 127, 50))  # Bronze
+                    medal = medals.get(rank, f"{rank}.")
+                    rank_text = f"{medal} {name} - {score} points"
 
-                text_rect = text_surf.get_rect(center=(self.screen_width // 2, y_offset))
-                self.screen.blit(text_surf, text_rect)
-                y_offset += 60
+                    if rank == 1:
+                        text_surf = rankings_font.render(rank_text, True, (255, 215, 0))  # Gold
+                    elif rank == 2:
+                        text_surf = pygame.font.Font(None, 42).render(rank_text, True, (192, 192, 192))  # Silver
+                    elif rank == 3:
+                        text_surf = pygame.font.Font(None, 38).render(rank_text, True, (205, 127, 50))  # Bronze
 
-            # Instructions at bottom
-            text = "Press 'R' to restart | Press 'Q' to quit"
-            text_surf = self.font.render(text, True, (200, 200, 200))
-            self.screen.blit(text_surf, (10, status_y))
+                    text_rect = text_surf.get_rect(center=(self.screen_width // 2, y_offset))
+                    self.screen.blit(text_surf, text_rect)
+                    y_offset += 60
+
+                # Instructions at bottom
+                text = "Press 'R' to restart | Press 'Q' to quit"
+                text_surf = self.font.render(text, True, (200, 200, 200))
+                self.screen.blit(text_surf, (10, status_y))
+            else:
+                # First 5 seconds: show game field, small countdown hint
+                remaining = int(5.0 - elapsed) + 1
+                text = f"{game.winner} wins!  (results in {remaining}s)"
+                text_surf = self.font.render(text, True, (255, 215, 0))
+                self.screen.blit(text_surf, (10, status_y))
         
         # Player list
         player_x = 10
