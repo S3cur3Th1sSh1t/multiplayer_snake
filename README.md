@@ -1,6 +1,6 @@
 # 🐍 Multi-User Snake Game
 
-This project was fully vibe coded for fun by Claude Opus 4.5.
+This project was fully vibe coded for fun by Claude & Github Copilot.
 
 A multiplayer Snake game for Linux/Windows supporting up to 10 players over the network.
 
